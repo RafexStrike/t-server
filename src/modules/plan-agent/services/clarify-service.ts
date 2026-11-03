@@ -1,11 +1,12 @@
 import { Types } from "mongoose";
 import { User } from "../../auth/models/User.js";
+import { fetchWithRetry } from "../../common/utils/retry.js";
 import { UserLearningSlots, toLearningSlots } from "../models/UserLearningSlots.js";
 import { getClarificationSystemPrompt } from "../utils/clarify-prompts.js";
 import type { LearningSlots, SlotEvaluationResult } from "../types/slots.js";
 
 const GEMINI_ENDPOINT =
-  "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite:generateContent";
+  "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent";
 
 interface GeminiResponse {
   candidates?: Array<{
@@ -117,17 +118,19 @@ export async function evaluateUserIntent(
   console.log(`[Plan Agent] Loaded clarification slots for user ${ownerId.toString()}.`);
   console.log("[Plan Agent] Starting Gemini clarification evaluation.");
 
-  const response = await fetch(`${GEMINI_ENDPOINT}?key=${encodeURIComponent(apiKey)}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      systemInstruction: {
-        parts: [{ text: getClarificationSystemPrompt(currentSlots) }],
-      },
-      contents: [{ role: "user", parts: [{ text: userMessage }] }],
-      generationConfig: { responseMimeType: "application/json" },
+  const response = await fetchWithRetry(() =>
+    fetch(`${GEMINI_ENDPOINT}?key=${encodeURIComponent(apiKey)}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        systemInstruction: {
+          parts: [{ text: getClarificationSystemPrompt(currentSlots) }],
+        },
+        contents: [{ role: "user", parts: [{ text: userMessage }] }],
+        generationConfig: { responseMimeType: "application/json" },
+      }),
     }),
-  });
+  );
 
   console.log(`[Plan Agent] Gemini clarification fetch status: ${response.status}`);
 

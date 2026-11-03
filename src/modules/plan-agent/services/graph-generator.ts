@@ -1,8 +1,9 @@
 import { getAbsoluteMasterySystemPrompt } from "../utils/prompt-templates.js";
+import { fetchWithRetry } from "../../common/utils/retry.js";
 import type { RawGraphNode } from "../types/graph.js";
 
 const GEMINI_ENDPOINT =
-  "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite:generateContent";
+  "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent";
 
 interface GeminiResponse {
   candidates?: Array<{
@@ -66,22 +67,24 @@ export async function generateAbsoluteMasteryGraph(
 ): Promise<RawGraphNode[]> {
   console.log(`[Plan Agent] Starting Gemini graph fetch for topic: ${topic}`);
 
-  const response = await fetch(`${GEMINI_ENDPOINT}?key=${encodeURIComponent(apiKey)}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      systemInstruction: {
-        parts: [{ text: getAbsoluteMasterySystemPrompt(topic) }],
-      },
-      contents: [
-        {
-          role: "user",
-          parts: [{ text: `Generate the absolute mastery prerequisite graph for: ${topic}` }],
+  const response = await fetchWithRetry(() =>
+    fetch(`${GEMINI_ENDPOINT}?key=${encodeURIComponent(apiKey)}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        systemInstruction: {
+          parts: [{ text: getAbsoluteMasterySystemPrompt(topic) }],
         },
-      ],
-      generationConfig: { responseMimeType: "application/json" },
+        contents: [
+          {
+            role: "user",
+            parts: [{ text: `Generate the absolute mastery prerequisite graph for: ${topic}` }],
+          },
+        ],
+        generationConfig: { responseMimeType: "application/json" },
+      }),
     }),
-  });
+  );
 
   console.log(`[Plan Agent] Gemini graph fetch status: ${response.status}`);
 
