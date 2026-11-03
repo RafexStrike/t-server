@@ -13,6 +13,7 @@ import {
   verifySessionToken,
 } from "../../auth/services/auth-service.js";
 import { Plan } from "../models/Plan.js";
+import { PlanNode, type PlanNodeDocument, type PlanNodeStatus } from "../models/PlanNode.js";
 import {
   clearUserLearningSlots,
   getUserLearningSlots,
@@ -24,6 +25,79 @@ import { createLearningPlan } from "../services/plan-service.js";
 
 const sessionPath = join(homedir(), ".plan-agent-session.json");
 const terminal = createInterface({ input: stdin, output: stdout });
+const BLOOM_LEVEL_NAMES = ["Remember", "Understand", "Apply", "Analyze", "Evaluate", "Create"];
+
+function printBox(title: string, lines: string[]): void {
+  const width = Math.max(title.length, ...lines.map((line) => line.length));
+  const divider = `+${"-".repeat(width + 2)}+`;
+  console.log(divider);
+  console.log(`| ${title.padEnd(width)} |`);
+  console.log(divider);
+  for (const line of lines) console.log(`| ${line.padEnd(width)} |`);
+  console.log(divider);
+}
+
+async function printSavedPlan(planId: string, userId: string): Promise<void> {
+  const plan = await Plan.findOne({ _id: planId, userId });
+  if (!plan) throw new Error(`Saved plan ${planId} could not be loaded for its owner.`);
+
+  const nodes = await PlanNode.find({ planId: plan._id }).sort({ bloomLevel: 1, conceptName: 1 });
+  const conceptNames = new Map(nodes.map((node) => [node._id.toString(), node.conceptName]));
+  const graphLines = nodes.flatMap((node, index) => {
+    const branch = index === nodes.length - 1 ? "\\--" : "|--";
+    const continuation = index === nodes.length - 1 ? "    " : "|   ";
+    const prerequisites = node.prerequisites.map((id) => conceptNames.get(id.toString()) ?? id.toString());
+    const levelName = BLOOM_LEVEL_NAMES[node.bloomLevel - 1] ?? "Unknown";
+    return [
+      `${branch} ${node._id.toString()} | ${node.conceptName}`,
+      `${continuation}[Level ${node.bloomLevel}: ${levelName}] ${node.status}`,
+      `${continuation}Prerequisites: ${prerequisites.length ? prerequisites.join(", ") : "None"}`,
+    ];
+  });
+
+  printBox("Saved Learning Plan", [
+    `Plan ID: ${plan._id.toString()}`,
+    `User ID: ${plan.userId.toString()}`,
+    `Topic: ${plan.topic}`,
+    `Target Bloom Depth: Level ${plan.targetDepth} (${BLOOM_LEVEL_NAMES[plan.targetDepth - 1] ?? "Unknown"})`,
+    `Initial Status: ${plan.status}`,
+    "",
+    "Pruned Curriculum DAG:",
+    ...(graphLines.length ? graphLines : ["(no saved concepts)"]),
+  ]);
+}
+
+async function printDiagnosticSummary(planId: string, userId: string): Promise<void> {
+  const nodes = await PlanNode.find({ planId }).sort({ bloomLevel: 1, conceptName: 1 });
+  const statuses: PlanNodeStatus[] = [
+    "PASSED_IN_DIAGNOSTIC",
+    "IN_PROGRESS",
+    "MASTERED",
+    "PENDING",
+  ];
+  const grouped = new Map<PlanNodeStatus, PlanNodeDocument[]>(
+    statuses.map((status) => [status, []]),
+  );
+  for (const node of nodes) grouped.get(node.status)?.push(node);
+
+  const passed = grouped.get("PASSED_IN_DIAGNOSTIC")?.length ?? 0;
+  const inProgress = grouped.get("IN_PROGRESS")?.length ?? 0;
+  const mastered = grouped.get("MASTERED")?.length ?? 0;
+  const lines = [
+    `Plan ID: ${planId}`,
+    `User ID: ${userId}`,
+    `[Total Concepts: ${nodes.length} | Passed: ${passed} | In Progress: ${inProgress} | Mastered: ${mastered}]`,
+    "",
+  ];
+  for (const status of statuses) {
+    lines.push(`${status}:`);
+    const group = grouped.get(status) ?? [];
+    if (group.length === 0) lines.push("  (none)");
+    else for (const node of group) lines.push(`  - ${node.conceptName} (${node._id.toString()})`);
+    lines.push("");
+  }
+  printBox("Diagnostic Results Summary", lines);
+}
 
 async function authenticate(): Promise<{ userId: string; email: string }> {
   try {
@@ -85,6 +159,7 @@ async function createPlanForUser(userId: string): Promise<string> {
     slots.targetDepth,
     process.env.GEMINI_API_KEY ?? "",
   );
+  await printSavedPlan(plan._id.toString(), userId);
   await clearUserLearningSlots(userId);
   return plan._id.toString();
 }
@@ -94,16 +169,19 @@ async function runDiagnostics(planId: string, userId: string): Promise<void> {
   while (true) {
     const node = await getNextDiagnosticNode(planId, userId);
     if (!node) break;
+    console.log();
     const answer = (await terminal.question(`Do you already know "${node.conceptName}"? [y/N]: `))
       .trim()
       .toLowerCase();
     await processDiagnosticAnswer(node._id.toString(), answer === "y" || answer === "yes", userId);
+    console.log();
   }
   await Plan.updateOne(
     { _id: planId, userId },
     { $set: { status: "READY" } },
   );
   console.log("[Runner] No pending diagnostic nodes remain.");
+  await printDiagnosticSummary(planId, userId);
 }
 
 async function main(): Promise<void> {
