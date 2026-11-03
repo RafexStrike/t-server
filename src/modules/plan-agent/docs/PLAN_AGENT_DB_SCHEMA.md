@@ -13,7 +13,7 @@ evolve independently.
 
 | Field | Type | Constraints and purpose |
 | --- | --- | --- |
-| `userId` | String or ObjectId | Required owner identifier. The schema validates that it is one of these two forms. |
+| `userId` | ObjectId reference to `User` | Required authenticated account that owns the plan. |
 | `topic` | String | Required, trimmed subject of the plan. |
 | `targetDepth` | Number | Required integer from 1 through 6, corresponding to the target Bloom level. |
 | `status` | Enum | `DIAGNOSTIC_IN_PROGRESS`, `READY`, or `COMPLETED`; new plans begin in diagnostic. |

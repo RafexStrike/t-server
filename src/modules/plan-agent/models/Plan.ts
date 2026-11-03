@@ -1,12 +1,5 @@
 import mongoose, { Document, Model, Schema, Types } from "mongoose";
 
-/**
- * A plan can be associated with an ObjectId-backed account or with an
- * application-level string identifier. Keep this union aligned with the
- * identity representation used by the calling application.
- */
-export type PlanUserId = string | Types.ObjectId;
-
 export const PLAN_STATUSES = [
   "DIAGNOSTIC_IN_PROGRESS",
   "READY",
@@ -20,7 +13,7 @@ export type PlanStatus = (typeof PLAN_STATUSES)[number];
  * diagnostic/planning workflow that will produce its curriculum graph.
  */
 export interface PlanDocument extends Document {
-  userId: PlanUserId;
+  userId: Types.ObjectId;
   topic: string;
   targetDepth: number;
   status: PlanStatus;
@@ -33,15 +26,9 @@ export type PlanModel = Model<PlanDocument>;
 const PlanSchema = new Schema<PlanDocument, PlanModel>(
   {
     userId: {
-      // Mixed is used because this boundary explicitly supports both common
-      // identity forms; the validator keeps arbitrary values out of the DB.
-      type: Schema.Types.Mixed,
+      type: Schema.Types.ObjectId,
+      ref: "User",
       required: [true, "A plan must belong to a user"],
-      validate: {
-        validator: (value: unknown): value is PlanUserId =>
-          typeof value === "string" || value instanceof Types.ObjectId,
-        message: "userId must be a string or a MongoDB ObjectId",
-      },
     },
     topic: {
       type: String,

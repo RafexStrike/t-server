@@ -1,3 +1,5 @@
+import { Types } from "mongoose";
+import { Plan } from "../models/Plan.js";
 import { PlanNode } from "../models/PlanNode.js";
 import type { PlanNodeDocument } from "../models/PlanNode.js";
 
@@ -61,7 +63,15 @@ function collectPendingDescendants(
 /** Selects the pending node whose known/unknown closure sizes are most balanced. */
 export async function getNextDiagnosticNode(
   planId: string,
+  userId: string,
 ): Promise<PlanNodeDocument | null> {
+  if (!Types.ObjectId.isValid(planId) || !Types.ObjectId.isValid(userId)) {
+    throw new Error("Valid plan and authenticated user ObjectIds are required for diagnostics.");
+  }
+  const plan = await Plan.exists({ _id: planId, userId });
+  if (!plan) throw new Error("Plan not found for the authenticated user.");
+  console.log(`[Plan Agent] Verified diagnostic plan ${planId} belongs to user ${userId}.`);
+
   const pendingNodes = await PlanNode.find({ planId, status: "PENDING" }).sort({
     conceptName: 1,
   });

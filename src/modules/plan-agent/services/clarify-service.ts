@@ -1,3 +1,6 @@
+import { Types } from "mongoose";
+import { User } from "../../auth/models/User.js";
+import { UserLearningSlots, toLearningSlots } from "../models/UserLearningSlots.js";
 import { getClarificationSystemPrompt } from "../utils/clarify-prompts.js";
 import type { LearningSlots, SlotEvaluationResult } from "../types/slots.js";
 
@@ -94,10 +97,24 @@ function parseSlotEvaluation(text: string): SlotEvaluationResult {
 }
 
 export async function evaluateUserIntent(
+  userId: string | Types.ObjectId,
   userMessage: string,
-  currentSlots: LearningSlots,
   apiKey: string,
 ): Promise<SlotEvaluationResult> {
+  if (!Types.ObjectId.isValid(userId)) {
+    throw new Error("A valid authenticated user ObjectId is required for clarification.");
+  }
+  const ownerId = new Types.ObjectId(userId);
+  if (!(await User.exists({ _id: ownerId }))) {
+    throw new Error(`Cannot evaluate clarification: user ${ownerId.toString()} does not exist.`);
+  }
+  const state = await UserLearningSlots.findOneAndUpdate(
+    { userId: ownerId },
+    { $setOnInsert: { userId: ownerId } },
+    { upsert: true, new: true, setDefaultsOnInsert: true },
+  );
+  const currentSlots = toLearningSlots(state);
+  console.log(`[Plan Agent] Loaded clarification slots for user ${ownerId.toString()}.`);
   console.log("[Plan Agent] Starting Gemini clarification evaluation.");
 
   const response = await fetch(`${GEMINI_ENDPOINT}?key=${encodeURIComponent(apiKey)}`, {
@@ -132,6 +149,11 @@ export async function evaluateUserIntent(
   }
 
   const evaluation = parseSlotEvaluation(text);
+  state.targetLanguageOrTool = evaluation.slots.targetLanguageOrTool;
+  state.specificSubdomain = evaluation.slots.specificSubdomain;
+  state.targetDepth = evaluation.slots.targetDepth;
+  await state.save();
+  console.log(`[Plan Agent] Saved clarification slots for user ${ownerId.toString()}.`);
   const missingSlots: string[] = [];
   if (!evaluation.slots.targetLanguageOrTool?.trim()) {
     missingSlots.push("targetLanguageOrTool");
@@ -151,4 +173,37 @@ export async function evaluateUserIntent(
   );
 
   return evaluation;
+}
+
+export async function getUserLearningSlots(
+  userId: string | Types.ObjectId,
+): Promise<LearningSlots> {
+  if (!Types.ObjectId.isValid(userId)) {
+    throw new Error("A valid authenticated user ObjectId is required to retrieve clarification slots.");
+  }
+  const ownerId = new Types.ObjectId(userId);
+  const record = await UserLearningSlots.findOne({ userId: ownerId });
+  return record
+    ? toLearningSlots(record)
+    : { targetLanguageOrTool: null, specificSubdomain: null, targetDepth: null };
+}
+
+export async function clearUserLearningSlots(
+  userId: string | Types.ObjectId,
+): Promise<void> {
+  if (!Types.ObjectId.isValid(userId)) {
+    throw new Error("A valid authenticated user ObjectId is required to clear clarification slots.");
+  }
+  const ownerId = new Types.ObjectId(userId);
+  await UserLearningSlots.updateOne(
+    { userId: ownerId },
+    {
+      $set: {
+        targetLanguageOrTool: null,
+        specificSubdomain: null,
+        targetDepth: null,
+      },
+    },
+  );
+  console.log(`[Plan Agent] Cleared consumed clarification slots for user ${ownerId.toString()}.`);
 }

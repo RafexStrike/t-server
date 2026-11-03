@@ -9,14 +9,23 @@ import { getNextDiagnosticNode } from "../services/diagnostic-engine.js";
 import { processDiagnosticAnswer } from "../services/diagnostic-evaluator.js";
 import { Plan } from "../models/Plan.js";
 import { PlanNode } from "../models/PlanNode.js";
+import { User } from "../../auth/models/User.js";
+import { UserLearningSlots } from "../models/UserLearningSlots.js";
+import { registerUser, verifySessionToken } from "../../auth/services/auth-service.js";
 
 const apiKey = process.env.GEMINI_API_KEY || "";
-const testUserId = "test_user_architecture_999";
+let testUserId = "";
 
 test("Plan Agent Integration Test Suite", async (t) => {
   // 1. Ensure Database Connection
   await t.test("Database Connection", async () => {
     await connectToDatabase();
+    const registration = await registerUser(
+      `plan-agent-test-${Date.now()}@example.test`,
+      "integration-test-password",
+    );
+    testUserId = registration.user.userId;
+    assert.strictEqual(verifySessionToken(registration.sessionToken), testUserId);
     assert.strictEqual(true, true, "Database connected successfully");
   });
 
@@ -32,8 +41,8 @@ test("Plan Agent Integration Test Suite", async (t) => {
     while (attempts < 3) {
       try {
         initialEval = await evaluateUserIntent(
+          testUserId,
           "I want to learn programming",
-          { targetLanguageOrTool: null, specificSubdomain: null, targetDepth: null },
           apiKey
         );
         break;
@@ -50,8 +59,8 @@ test("Plan Agent Integration Test Suite", async (t) => {
 
     // Fully scoped prompt
     const finalEval = await evaluateUserIntent(
+      testUserId,
       "I want to learn JavaScript DOM manipulation at an application/apply level (Bloom 3)",
-      { targetLanguageOrTool: "JavaScript", specificSubdomain: "DOM Manipulation", targetDepth: 3 },
       apiKey
     );
 
@@ -105,12 +114,12 @@ test("Plan Agent Integration Test Suite", async (t) => {
   await t.test("DiagnosticEngine & Evaluator: Topological median and KST cascade", async () => {
     if (!createdPlanId) return;
 
-    const diagnosticNode = await getNextDiagnosticNode(createdPlanId);
+    const diagnosticNode = await getNextDiagnosticNode(createdPlanId, testUserId);
     
     if (diagnosticNode) {
       assert.strictEqual(diagnosticNode.status, "PENDING", "Selected diagnostic node must be pending");
 
-      await processDiagnosticAnswer(diagnosticNode._id.toString(), true);
+      await processDiagnosticAnswer(diagnosticNode._id.toString(), true, testUserId);
 
       const updatedNode = await PlanNode.findById(diagnosticNode._id);
       assert.strictEqual(updatedNode?.status, "PASSED_IN_DIAGNOSTIC", "Node status should update to passed");
@@ -123,6 +132,8 @@ test("Plan Agent Integration Test Suite", async (t) => {
       await Plan.deleteMany({ userId: testUserId });
       await PlanNode.deleteMany({ planId: createdPlanId });
     }
+    await UserLearningSlots.deleteMany({ userId: testUserId });
+    await User.deleteOne({ _id: testUserId });
     await disconnectFromDatabase();
   });
 });

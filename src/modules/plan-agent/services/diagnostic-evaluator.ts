@@ -1,4 +1,5 @@
 import { Types } from "mongoose";
+import { Plan } from "../models/Plan.js";
 import { PlanNode } from "../models/PlanNode.js";
 import type { PlanNodeDocument } from "../models/PlanNode.js";
 
@@ -66,15 +67,20 @@ function collectPendingDescendants(
 export async function processDiagnosticAnswer(
   nodeId: string,
   passed: boolean,
+  userId: string,
 ): Promise<void> {
-  if (!Types.ObjectId.isValid(nodeId)) {
-    throw new Error(`Invalid PlanNode id: ${nodeId}`);
+  if (!Types.ObjectId.isValid(nodeId) || !Types.ObjectId.isValid(userId)) {
+    throw new Error("Valid PlanNode and authenticated user ObjectIds are required.");
   }
 
   const node = await PlanNode.findById(nodeId);
   if (!node) {
     throw new Error(`PlanNode not found: ${nodeId}`);
   }
+  if (!(await Plan.exists({ _id: node.planId, userId }))) {
+    throw new Error("PlanNode is not owned by the authenticated user.");
+  }
+  console.log(`[Plan Agent] Verified diagnostic answer owner ${userId} for node ${nodeId}.`);
 
   const allNodes = await PlanNode.find({ planId: node.planId });
   const nodesById = new Map(

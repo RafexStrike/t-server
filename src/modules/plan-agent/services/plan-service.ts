@@ -1,6 +1,7 @@
 import mongoose, { Types } from "mongoose";
 import { Plan } from "../models/Plan.js";
 import { PlanNode } from "../models/PlanNode.js";
+import { User } from "../../auth/models/User.js";
 import { generateAbsoluteMasteryGraph } from "./graph-generator.js";
 import { pruneGraph } from "../utils/graph-pruner.js";
 
@@ -9,11 +10,21 @@ import { pruneGraph } from "../utils/graph-pruner.js";
  * nodes. Graph generation remains separate from persistence and pruning.
  */
 export async function createLearningPlan(
-  userId: string,
+  userId: string | Types.ObjectId,
   topic: string,
   targetDepth: number,
   apiKey: string,
 ) {
+  if (!Types.ObjectId.isValid(userId)) {
+    throw new Error("A valid authenticated user ObjectId is required to create a learning plan.");
+  }
+  const ownerId = new Types.ObjectId(userId);
+  const owner = await User.exists({ _id: ownerId });
+  if (!owner) {
+    throw new Error(`Cannot create a learning plan: user ${ownerId.toString()} does not exist.`);
+  }
+  console.log(`[Plan Agent] Verified plan owner ${ownerId.toString()}.`);
+
   console.log(`[Plan Agent] Fetching absolute mastery graph for "${topic}".`);
   const rawGraph = await generateAbsoluteMasteryGraph(topic, apiKey);
 
@@ -24,14 +35,11 @@ export async function createLearningPlan(
   );
 
   const plan = new Plan({
-    userId,
+    userId: ownerId,
     topic,
     targetDepth,
     status: "DIAGNOSTIC_IN_PROGRESS",
   });
-  await plan.save();
-  console.log(`[Plan Agent] Plan created: ${plan._id.toString()}.`);
-
   const nodeIdsByName = new Map<string, Types.ObjectId>(
     prunedGraph.map((node) => [node.conceptName, new mongoose.Types.ObjectId()]),
   );
@@ -57,8 +65,18 @@ export async function createLearningPlan(
     };
   });
 
-  await PlanNode.insertMany(nodesToInsert);
-  console.log(`[Plan Agent] Inserted ${nodesToInsert.length} PlanNode documents.`);
+  await plan.save();
+  console.log(`[Plan Agent] Plan ${plan._id.toString()} persisted for user ${ownerId.toString()}.`);
+  try {
+    await PlanNode.insertMany(nodesToInsert);
+    console.log(
+      `[Plan Agent] Inserted ${nodesToInsert.length} PlanNode documents for user ${ownerId.toString()}.`,
+    );
+  } catch (error) {
+    await PlanNode.deleteMany({ planId: plan._id });
+    await Plan.deleteOne({ _id: plan._id, userId: ownerId });
+    throw error;
+  }
 
   return plan;
 }
