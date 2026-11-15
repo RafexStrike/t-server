@@ -6,7 +6,7 @@ import { getClarificationSystemPrompt } from "../utils/clarify-prompts.js";
 import type { LearningSlots, SlotEvaluationResult } from "../types/slots.js";
 
 const GEMINI_ENDPOINT =
-  "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent";
+  "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite:generateContent";
 
 interface GeminiResponse {
   candidates?: Array<{

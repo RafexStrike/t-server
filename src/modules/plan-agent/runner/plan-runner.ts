@@ -172,8 +172,19 @@ async function runDiagnostics(planId: string, userId: string): Promise<void> {
   const plan = await Plan.findOne({ _id: planId, userId });
   if (!plan) throw new Error(`Plan ${planId} could not be loaded for its owner.`);
   const apiKey = process.env.GEMINI_API_KEY ?? "";
+  const totalNodes = await PlanNode.countDocuments({ planId });
+  const maxQuestions = Math.max(5, Math.min(10, Math.ceil(totalNodes * 0.4)));
+  let questionsAsked = 0;
   console.log(`[Runner] Starting diagnostics for plan ${planId} as user ${userId}.`);
   while (true) {
+    if (questionsAsked >= maxQuestions) {
+      await PlanNode.updateMany(
+        { planId, status: "PENDING" },
+        { $set: { status: "IN_PROGRESS" } },
+      );
+      console.log(`[Runner] Diagnostic question budget (${maxQuestions}) reached; remaining pending concepts marked IN_PROGRESS.`);
+      break;
+    }
     const node = await getNextDiagnosticNode(planId, userId);
     if (!node) break;
     const diagnosticQuestion = await generateDiagnosticQuestion(
@@ -188,6 +199,7 @@ async function runDiagnostics(planId: string, userId: string): Promise<void> {
     console.log(`[Plan Agent] Bloom level: ${node.bloomLevel} (${bloomLevelName})`);
     console.log(`[Plan Agent] ${diagnosticQuestion.question}`);
     const userAnswer = await terminal.question("Your answer (or 'skip' if unsure): ");
+    questionsAsked += 1;
     const evaluation = await evaluateDiagnosticResponse(
       plan.topic,
       node.conceptName,

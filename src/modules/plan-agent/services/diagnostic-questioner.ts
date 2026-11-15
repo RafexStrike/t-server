@@ -9,11 +9,11 @@ import {
 } from "../utils/diagnostic-prompts.js";
 
 const GEMINI_ENDPOINT =
-  "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent";
+  "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite:generateContent";
 const SKIP_ANSWERS = new Set([
   "skip",
   "idk",
-  "i don't know",
+  "i dont know",
   "dont know",
   "pass",
   "no",
@@ -114,7 +114,7 @@ export async function evaluateDiagnosticResponse(
   userAnswer: string,
   apiKey: string,
 ): Promise<DiagnosticEvaluationResult> {
-  const normalizedAnswer = userAnswer.trim().toLowerCase();
+  const normalizedAnswer = userAnswer.trim().toLowerCase().replace(/['’.!?]/g, "");
   if (normalizedAnswer.length === 0 || SKIP_ANSWERS.has(normalizedAnswer)) {
     console.log(`[Plan Agent] Diagnostic fast-path skip for "${conceptName}"; marked for learning.`);
     return { passed: false, feedback: "Skipped; marked for learning." };
