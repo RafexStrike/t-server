@@ -1,3 +1,4 @@
+import { Types } from "mongoose";
 import { Plan } from "../../plan-agent/models/Plan.js";
 import { PlanNode } from "../../plan-agent/models/PlanNode.js";
 import { UserMastery } from "../../plan-agent/models/UserMastery.js";
@@ -14,6 +15,12 @@ export async function syncPriorUserMastery(
   planId: string,
   userId: string,
 ): Promise<number> {
+  if (!Types.ObjectId.isValid(planId)) {
+    throw new Error("A valid plan ObjectId is required for prior mastery reconciliation.");
+  }
+  if (!Types.ObjectId.isValid(userId)) {
+    throw new Error("A valid authenticated user ObjectId is required for prior mastery reconciliation.");
+  }
   const plan = await Plan.exists({ _id: planId, userId });
   if (!plan) throw new Error("Plan not found for the authenticated user.");
 
@@ -23,10 +30,8 @@ export async function syncPriorUserMastery(
   });
   if (unresolvedNodes.length === 0) return 0;
 
-  const conceptNames = unresolvedNodes.map((node) => node.conceptName);
   const priorMastery = await UserMastery.find({
     userId,
-    conceptName: { $in: conceptNames },
     masteryScore: { $gte: PRIOR_MASTERY_THRESHOLD },
   }).select("conceptName");
   if (priorMastery.length === 0) {
@@ -36,11 +41,17 @@ export async function syncPriorUserMastery(
     return 0;
   }
 
-  const masteredConceptNames = priorMastery.map((mastery) => mastery.conceptName);
+  const masteredConceptNames = new Set(
+    priorMastery.map((mastery) => mastery.conceptName.trim().toLowerCase()),
+  );
+  const matchingNodeIds = unresolvedNodes
+    .filter((node) => masteredConceptNames.has(node.conceptName.trim().toLowerCase()))
+    .map((node) => node._id);
+  if (matchingNodeIds.length === 0) return 0;
   const result = await PlanNode.updateMany(
     {
       planId,
-      conceptName: { $in: masteredConceptNames },
+      _id: { $in: matchingNodeIds },
       status: { $in: ["PENDING", "IN_PROGRESS"] },
     },
     { $set: { status: "MASTERED" } },
@@ -56,6 +67,12 @@ export async function getOuterFringe(
   planId: string,
   userId: string,
 ): Promise<OuterFringeResult> {
+  if (!Types.ObjectId.isValid(planId)) {
+    throw new Error("A valid plan ObjectId is required to load the Outer Fringe.");
+  }
+  if (!Types.ObjectId.isValid(userId)) {
+    throw new Error("A valid authenticated user ObjectId is required to load the Outer Fringe.");
+  }
   const plan = await Plan.exists({ _id: planId, userId });
   if (!plan) throw new Error("Plan not found for the authenticated user.");
 

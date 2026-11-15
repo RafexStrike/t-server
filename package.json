@@ -8,6 +8,7 @@
     "build": "tsc",
     "start": "node dist/server.js",
     "test-plan-agent": "node --import tsx --test src/modules/plan-agent/tests/plan-agent.test.ts",
+    "test-learn-agent": "node --import tsx --test src/modules/learn-agent/tests/learn-agent.test.ts",
     "runner": "tsx src/modules/plan-agent/runner/plan-runner.ts"
   },
   "keywords": [],

@@ -1,3 +1,4 @@
+import { Types } from "mongoose";
 import { Plan } from "../../plan-agent/models/Plan.js";
 import { PlanNode } from "../../plan-agent/models/PlanNode.js";
 import { countTransitiveAncestors } from "../utils/outer-fringe-selector.js";
@@ -11,6 +12,15 @@ export async function assessNodeTurnWml(params: {
   textToMeasure: string;
   capacityThreshold?: number;
 }): Promise<WmlAssessment> {
+  if (!Types.ObjectId.isValid(params.planId)) {
+    throw new Error("A valid plan ObjectId is required for WML assessment.");
+  }
+  if (!Types.ObjectId.isValid(params.userId)) {
+    throw new Error("A valid authenticated user ObjectId is required for WML assessment.");
+  }
+  if (!Types.ObjectId.isValid(params.nodeId)) {
+    throw new Error("A valid plan node ObjectId is required for WML assessment.");
+  }
   const plan = await Plan.exists({ _id: params.planId, userId: params.userId });
   if (!plan) throw new Error("Plan not found for the authenticated user.");
 

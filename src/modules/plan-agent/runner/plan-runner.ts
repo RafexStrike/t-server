@@ -26,6 +26,12 @@ import {
   generateDiagnosticQuestion,
 } from "../services/diagnostic-questioner.js";
 import { createLearningPlan } from "../services/plan-service.js";
+import { getOuterFringe } from "../../learn-agent/services/outer-fringe.js";
+import {
+  prepareNodeLesson,
+  submitNodeAttempt,
+} from "../../learn-agent/services/micro-tutor.js";
+import { DEFAULT_WML_CAPACITY } from "../../learn-agent/utils/wml-calculator.js";
 
 const sessionPath = join(homedir(), ".plan-agent-session.json");
 const terminal = createInterface({ input: stdin, output: stdout });
@@ -86,11 +92,12 @@ async function printDiagnosticSummary(planId: string, userId: string): Promise<v
 
   const passed = grouped.get("PASSED_IN_DIAGNOSTIC")?.length ?? 0;
   const inProgress = grouped.get("IN_PROGRESS")?.length ?? 0;
+  const pending = grouped.get("PENDING")?.length ?? 0;
   const mastered = grouped.get("MASTERED")?.length ?? 0;
   const lines = [
     `Plan ID: ${planId}`,
     `User ID: ${userId}`,
-    `[Total Concepts: ${nodes.length} | Passed: ${passed} | In Progress: ${inProgress} | Mastered: ${mastered}]`,
+    `[Total Concepts: ${nodes.length} | Finished during diagnosis: ${passed} | Queued for Micro-Tutor: ${inProgress + pending} (In Progress: ${inProgress}, Pending: ${pending}) | Mastered: ${mastered}]`,
     "",
   ];
   for (const status of statuses) {
@@ -175,6 +182,7 @@ async function runDiagnostics(planId: string, userId: string): Promise<void> {
   const totalNodes = await PlanNode.countDocuments({ planId });
   const maxQuestions = Math.max(5, Math.min(10, Math.ceil(totalNodes * 0.4)));
   let questionsAsked = 0;
+  console.log("=== Phase 1: Adaptive Diagnostic ===");
   console.log(`[Runner] Starting diagnostics for plan ${planId} as user ${userId}.`);
   while (true) {
     if (questionsAsked >= maxQuestions) {
@@ -211,6 +219,14 @@ async function runDiagnostics(planId: string, userId: string): Promise<void> {
     );
     console.log(`[${evaluation.passed ? "PASS" : "FAIL"}] ${evaluation.feedback}`);
     await processDiagnosticAnswer(node._id.toString(), evaluation.passed, userId);
+    const [passedCount, pendingCount] = await Promise.all([
+      PlanNode.countDocuments({ planId, status: "PASSED_IN_DIAGNOSTIC" }),
+      PlanNode.countDocuments({ planId, status: "PENDING" }),
+    ]);
+    const resolvedCount = totalNodes - pendingCount;
+    console.log(
+      `[Diagnostic Progress] Finished/tested out: ${passedCount} / ${totalNodes} concepts | Diagnostic resolved: ${resolvedCount} / ${totalNodes} (${pendingCount} pending)`,
+    );
     console.log();
   }
   await Plan.updateOne(
@@ -219,6 +235,111 @@ async function runDiagnostics(planId: string, userId: string): Promise<void> {
   );
   console.log("[Runner] No pending diagnostic nodes remain.");
   await printDiagnosticSummary(planId, userId);
+}
+
+async function runLearningSession(planId: string, userId: string): Promise<void> {
+  const apiKey = process.env.GEMINI_API_KEY ?? "";
+  let capacityThreshold = DEFAULT_WML_CAPACITY;
+
+  console.log("=== Phase 2: Micro-Tutor Learning Session ===");
+  while (true) {
+    const fringe = await getOuterFringe(planId, userId);
+    const totalNodes = await PlanNode.countDocuments({ planId });
+    const completedCount = totalNodes - fringe.remainingCount;
+    const currentNodeNumber = completedCount + 1;
+    if (fringe.isPlanCompleted || !fringe.nextNodeId) {
+      const [plan, diagnosticPassedCount, tutoredMasteredCount] = await Promise.all([
+        Plan.findOne({ _id: planId, userId }),
+        PlanNode.countDocuments({ planId, status: "PASSED_IN_DIAGNOSTIC" }),
+        PlanNode.countDocuments({ planId, status: "MASTERED" }),
+      ]);
+      const totalCompleted = diagnosticPassedCount + tutoredMasteredCount;
+      printBox("Plan Completed", [
+        `Topic: ${plan?.topic ?? "Unknown"}`,
+        `Plan ID: ${planId}`,
+        `Total Completed: ${totalCompleted} / ${totalNodes} concepts`,
+        `  - Completed during diagnosis: ${diagnosticPassedCount}`,
+        `  - Mastered via Micro-Tutor:   ${tutoredMasteredCount}`,
+      ]);
+      break;
+    }
+
+    const selected = fringe.unlockedNodes.find((node) => node.nodeId === fringe.nextNodeId);
+    if (!selected) throw new Error("Outer Fringe selected a node that was not in its candidate list.");
+    console.log(
+      `[Runner] Outer Fringe candidates: ${fringe.unlockedNodes.length} | Selected: ${selected.conceptName} (Bloom ${selected.bloomLevel}) | Remaining: ${fringe.remainingCount}.`,
+    );
+
+    let attemptCount = 1;
+    let previousAttempt: string | undefined;
+    let tutorFeedback: string | undefined;
+    const wmlSamples: number[] = [];
+    let shouldExit = false;
+
+    while (true) {
+      const turn = await prepareNodeLesson({
+        planId,
+        userId,
+        nodeId: selected.nodeId,
+        apiKey,
+        capacityThreshold,
+        ...(previousAttempt !== undefined ? { previousAttempt } : {}),
+        ...(tutorFeedback !== undefined ? { tutorFeedback } : {}),
+      });
+      wmlSamples.push(turn.wmlAssessment.totalWml);
+      console.log();
+      const bloomLevelName = BLOOM_LEVEL_NAMES[selected.bloomLevel - 1] ?? "Unknown";
+      console.log(
+        `(${selected.conceptName}: learning node ${currentNodeNumber} out of ${totalNodes} | Bloom ${selected.bloomLevel}: ${bloomLevelName} | ${fringe.remainingCount} remaining)`,
+      );
+      console.log("---");
+      const attemptLabel = attemptCount > 1 ? `Attempt ${attemptCount} - Remediation` : `Attempt ${attemptCount}`;
+      const gatekeeperNote = turn.wasRegeneratedForOverload
+        ? " (simplified by WML gatekeeper)"
+        : "";
+      console.log(
+        `${attemptLabel} | WML: ${turn.wmlAssessment.totalWml.toFixed(2)} [${turn.wmlAssessment.loadLevel}]${gatekeeperNote}`,
+      );
+      console.log(`[Micro-Tutor] ${turn.lesson.explanation}`);
+      console.log(`[Check] ${turn.lesson.checkQuestion}`);
+      const userAnswer = await terminal.question("Your answer (or 'exit' to pause): ");
+      if (["exit", "quit"].includes(userAnswer.trim().toLowerCase())) {
+        console.log(`[Runner] Pausing with "${selected.conceptName}" saved as IN_PROGRESS.`);
+        console.log(
+          `Progress saved: ${completedCount} / ${totalNodes} concepts completed. Resume anytime from the main menu.`,
+        );
+        shouldExit = true;
+        break;
+      }
+
+      const averageWml = wmlSamples.reduce((sum, score) => sum + score, 0) / wmlSamples.length;
+      const evaluation = await submitNodeAttempt({
+        planId,
+        userId,
+        nodeId: selected.nodeId,
+        lesson: turn.lesson,
+        userAnswer,
+        attemptCount,
+        averageWml,
+        capacityThreshold,
+        apiKey,
+      });
+      if (evaluation.mastered) {
+        console.log(`[Mastered] ${evaluation.feedback}`);
+        capacityThreshold = evaluation.updatedCapacityThreshold;
+        console.log(`[Runner] Updated cognitive capacity threshold: ${capacityThreshold.toFixed(2)}.`);
+        break;
+      }
+
+      console.log(`[Not yet] ${evaluation.feedback}`);
+      if (evaluation.hint) console.log(`[Hint] ${evaluation.hint}`);
+      previousAttempt = userAnswer;
+      tutorFeedback = [evaluation.feedback, evaluation.hint].filter(Boolean).join(" ");
+      attemptCount += 1;
+    }
+
+    if (shouldExit) break;
+  }
 }
 
 async function main(): Promise<void> {
@@ -231,8 +352,24 @@ async function main(): Promise<void> {
     status: { $in: ["DIAGNOSTIC_IN_PROGRESS", "READY"] },
   }).sort({ updatedAt: -1 });
   console.log(`[Runner] ${activePlans.length} active plan(s) for ${email}.`);
+  const activePlanProgress = await Promise.all(
+    activePlans.map(async (plan) => {
+      const [totalNodes, diagnosticPassedCount, tutoredMasteredCount] = await Promise.all([
+        PlanNode.countDocuments({ planId: plan._id }),
+        PlanNode.countDocuments({ planId: plan._id, status: "PASSED_IN_DIAGNOSTIC" }),
+        PlanNode.countDocuments({ planId: plan._id, status: "MASTERED" }),
+      ]);
+      return {
+        totalNodes,
+        completedCount: diagnosticPassedCount + tutoredMasteredCount,
+      };
+    }),
+  );
   activePlans.forEach((plan, index) => {
-    console.log(`  [${index + 1}] ${plan.topic} (${plan.status})`);
+    const progress = activePlanProgress[index];
+    console.log(
+      `  [${index + 1}] ${plan.topic} (${plan.status} - ${progress?.completedCount ?? 0}/${progress?.totalNodes ?? 0} concepts completed)`,
+    );
   });
   console.log("  [0] Start a new plan");
 
@@ -245,7 +382,16 @@ async function main(): Promise<void> {
     if (!selected) throw new Error("Choose one of the listed plans.");
     planId = selected._id.toString();
   }
-  await runDiagnostics(planId, userId);
+  let plan = await Plan.findOne({ _id: planId, userId });
+  if (!plan) throw new Error(`Plan ${planId} could not be loaded for its owner.`);
+  if (plan.status === "DIAGNOSTIC_IN_PROGRESS") {
+    await runDiagnostics(planId, userId);
+  }
+  plan = await Plan.findOne({ _id: planId, userId });
+  if (!plan) throw new Error(`Plan ${planId} could not be reloaded for its owner.`);
+  if (plan.status === "READY") {
+    await runLearningSession(planId, userId);
+  }
 }
 
 try {
