@@ -21,6 +21,10 @@ import {
 } from "../services/clarify-service.js";
 import { getNextDiagnosticNode } from "../services/diagnostic-engine.js";
 import { processDiagnosticAnswer } from "../services/diagnostic-evaluator.js";
+import {
+  evaluateDiagnosticResponse,
+  generateDiagnosticQuestion,
+} from "../services/diagnostic-questioner.js";
 import { createLearningPlan } from "../services/plan-service.js";
 
 const sessionPath = join(homedir(), ".plan-agent-session.json");
@@ -165,15 +169,36 @@ async function createPlanForUser(userId: string): Promise<string> {
 }
 
 async function runDiagnostics(planId: string, userId: string): Promise<void> {
+  const plan = await Plan.findOne({ _id: planId, userId });
+  if (!plan) throw new Error(`Plan ${planId} could not be loaded for its owner.`);
+  const apiKey = process.env.GEMINI_API_KEY ?? "";
   console.log(`[Runner] Starting diagnostics for plan ${planId} as user ${userId}.`);
   while (true) {
     const node = await getNextDiagnosticNode(planId, userId);
     if (!node) break;
+    const diagnosticQuestion = await generateDiagnosticQuestion(
+      plan.topic,
+      node.conceptName,
+      node.bloomLevel,
+      apiKey,
+    );
+    const bloomLevelName = BLOOM_LEVEL_NAMES[node.bloomLevel - 1] ?? "Unknown";
     console.log();
-    const answer = (await terminal.question(`Do you already know "${node.conceptName}"? [y/N]: `))
-      .trim()
-      .toLowerCase();
-    await processDiagnosticAnswer(node._id.toString(), answer === "y" || answer === "yes", userId);
+    console.log(`[Plan Agent] Concept: ${node.conceptName}`);
+    console.log(`[Plan Agent] Bloom level: ${node.bloomLevel} (${bloomLevelName})`);
+    console.log(`[Plan Agent] ${diagnosticQuestion.question}`);
+    const userAnswer = await terminal.question("Your answer (or 'skip' if unsure): ");
+    const evaluation = await evaluateDiagnosticResponse(
+      plan.topic,
+      node.conceptName,
+      node.bloomLevel,
+      diagnosticQuestion.question,
+      diagnosticQuestion.expectedCriteria,
+      userAnswer,
+      apiKey,
+    );
+    console.log(`[${evaluation.passed ? "PASS" : "FAIL"}] ${evaluation.feedback}`);
+    await processDiagnosticAnswer(node._id.toString(), evaluation.passed, userId);
     console.log();
   }
   await Plan.updateOne(

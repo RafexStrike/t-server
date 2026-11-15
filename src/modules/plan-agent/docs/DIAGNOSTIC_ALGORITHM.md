@@ -13,6 +13,12 @@ expected to reduce uncertainty more than one near either end. It is a
 heuristic, not an exact entropy calculation; DAG branching and overlapping
 closures can make the groups' actual probabilities unequal.
 
+For each selected node, the runner requests one diagnostic question calibrated
+to the node's Bloom level and the plan topic. Gemini grades the learner's
+free-text response against explicit passing criteria; skips and non-mastery
+produce a `false` result. This binary pass/fail observation is passed to the
+KST propagation engine, which updates the node and its related concepts.
+
 The propagation rules encode the Knowledge Space Theory assumptions used by
 this simplified model:
 
