@@ -20,8 +20,9 @@ export function getDiagnosticQuestionPrompt(
   bloomLevel: number,
 ): string {
   const level = getBloomLevel(bloomLevel);
-  return `Generate one diagnostic question for a learner studying the topic: "${topic}".\n` +
-    `Focus only on this concept: "${conceptName}".\n` +
+  return `Generate one diagnostic question for the concept: "${conceptName}".\n` +
+    `The topic is "${topic}" and may be used only to disambiguate terminology if the concept name is ambiguous. ` +
+    "It must not broaden the subject or introduce other concepts from the topic. Test strictly the named concept, and do not ask about advanced or related topic material; " +
     `Target Bloom's Taxonomy level ${bloomLevel} (${level.name}): ${level.guidance}\n` +
     "The question must be concise, answerable in a terminal, and assess only this concept at the requested cognitive depth. " +
     "Also provide expectedCriteria describing the essential evidence a passing answer must demonstrate. " +
