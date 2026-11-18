@@ -13,11 +13,12 @@ import type {
 import type { WmlAssessment } from "../types/wml.js";
 import { calculateCognitiveEfficiency } from "../utils/cognitive-efficiency.js";
 import { DEFAULT_WML_CAPACITY } from "../utils/wml-calculator.js";
+import { countTransitiveAncestors } from "../utils/outer-fringe-selector.js";
 import {
   getLearnerEvaluationPrompt,
   getMicroLessonPrompt,
 } from "../utils/tutor-prompts.js";
-import { assessNodeTurnWml } from "./wml-interceptor.js";
+import { assessNodeTurnWml, preGateIntrinsicLoad } from "./wml-interceptor.js";
 
 const GEMINI_ENDPOINT =
   "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite:generateContent";
@@ -141,18 +142,49 @@ export async function prepareNodeLesson(params: {
     await node.save();
   }
 
+  const planNodes = await PlanNode.find({ planId: params.planId });
+  const graphNodes = planNodes.map((candidate) => ({
+    nodeId: candidate._id.toString(),
+    conceptName: candidate.conceptName,
+    bloomLevel: candidate.bloomLevel,
+    status: candidate.status,
+    prerequisiteIds: candidate.prerequisites.map((id) => id.toString()),
+  }));
+  const unmasteredPrerequisites = node.prerequisites
+    .map((prerequisiteId) => planNodes.find(
+      (candidate) => candidate._id.toString() === prerequisiteId.toString(),
+    ))
+    .filter(
+      (prerequisite): prerequisite is NonNullable<typeof prerequisite> =>
+        prerequisite !== undefined &&
+        prerequisite.status !== "MASTERED" &&
+        prerequisite.status !== "PASSED_IN_DIAGNOSTIC",
+    )
+    .map((prerequisite) => prerequisite.conceptName);
+  const preGate = preGateIntrinsicLoad({
+    bloomLevel: node.bloomLevel,
+    directPrerequisiteCount: node.prerequisites.length,
+    transitiveAncestorCount: countTransitiveAncestors(node._id.toString(), graphNodes),
+    unmasteredPrerequisites,
+    capacityThreshold: params.capacityThreshold,
+  });
+  console.log(
+    `[Learn Agent][System 1 Pre-Gate] Node="${node.conceptName}" bloom=${node.bloomLevel} IL=${preGate.intrinsicLoad.toFixed(2)} budget=${preGate.extrinsicBudget.toFixed(2)} mode=${preGate.mode}`,
+  );
+
   const remediation = params.previousAttempt !== undefined && params.tutorFeedback !== undefined;
   const initialDirectives = remediation
     ? [
         "Use high scaffolding: isolate the learner's misconception, explain one small step, and provide a concrete example.",
         "Keep the explanation concise and do not introduce adjacent concepts.",
       ]
-    : [];
+    : preGate.proactiveDirectives;
   const promptParams = {
     topic: plan.topic,
     conceptName: node.conceptName,
     bloomLevel: node.bloomLevel,
     scaffoldingDirectives: initialDirectives,
+    preGateResult: preGate,
     ...(remediation
       ? {
           previousAttempt: params.previousAttempt,
@@ -174,12 +206,17 @@ export async function prepareNodeLesson(params: {
   });
   let wasRegeneratedForOverload = false;
 
-  if (wmlAssessment.isOverloaded) {
+  const exceedsExtrinsicBudget =
+    0.45 * wmlAssessment.extrinsic.score > preGate.extrinsicBudget;
+  if (wmlAssessment.isOverloaded && exceedsExtrinsicBudget) {
     console.log(
       `[Learn Agent][Micro-Tutor] WML gatekeeper intervened for "${node.conceptName}"; regenerating once with ${wmlAssessment.scaffoldingDirectives.length} directive(s).`,
     );
     lesson = await generateLesson(
-      { ...promptParams, scaffoldingDirectives: wmlAssessment.scaffoldingDirectives },
+      {
+        ...promptParams,
+        scaffoldingDirectives: [...initialDirectives, ...wmlAssessment.scaffoldingDirectives],
+      },
       params.apiKey,
     );
     wmlAssessment = await assessNodeTurnWml({
@@ -198,6 +235,8 @@ export async function prepareNodeLesson(params: {
     bloomLevel: node.bloomLevel,
     lesson,
     wmlAssessment,
+    preGate,
+    regenerated: wasRegeneratedForOverload,
     wasRegeneratedForOverload,
   };
 }

@@ -1,10 +1,65 @@
 import type {
   ExtrinsicLoadMetrics,
+  IntrinsicPreGateResult,
   IntrinsicLoadMetrics,
   WmlAssessment,
 } from "../types/wml.js";
 
 export const DEFAULT_WML_CAPACITY = 0.70;
+
+export function preGateIntrinsicLoad(input: {
+  bloomLevel: number;
+  directPrerequisiteCount: number;
+  transitiveAncestorCount: number;
+  unmasteredPrerequisites?: string[];
+  capacityThreshold?: number;
+}): IntrinsicPreGateResult {
+  const intrinsicLoad = calculateIntrinsicLoad(
+    input.bloomLevel,
+    input.directPrerequisiteCount,
+    input.transitiveAncestorCount,
+  ).score;
+  const weightedIntrinsic = 0.55 * intrinsicLoad;
+  const capacityThreshold = clamp01(
+    input.capacityThreshold ?? DEFAULT_WML_CAPACITY,
+  );
+  const extrinsicBudget = Math.max(0, capacityThreshold - weightedIntrinsic);
+  let mode: IntrinsicPreGateResult["mode"];
+  const proactiveDirectives: string[] = [];
+
+  if (weightedIntrinsic >= capacityThreshold) {
+    mode = "INTRINSIC_OVERLOAD";
+    proactiveDirectives.push(
+      "Teach only one atomic intuition chunk: explain the single core mental model in plain language and give one minimal illustrative example. Defer advanced synthesis and edge cases to the next turn.",
+    );
+  } else if (
+    extrinsicBudget <= 0.25 ||
+    weightedIntrinsic >= capacityThreshold * 0.70
+  ) {
+    mode = "CONSTRAINED";
+    proactiveDirectives.push(
+      "Keep every sentence to 14 words or fewer and the complete lesson to 150 words or fewer.",
+      "Use zero unmastered technical jargon; only direct prerequisite terms may appear.",
+      "Include exactly one concrete, step-by-step example.",
+    );
+  } else {
+    mode = "OPTIMAL";
+  }
+
+  if (mode !== "OPTIMAL" && input.unmasteredPrerequisites?.length) {
+    proactiveDirectives.push(
+      `Only use these direct prerequisite terms when needed, and define them plainly: ${input.unmasteredPrerequisites.join(", ")}.`,
+    );
+  }
+
+  return {
+    mode,
+    intrinsicLoad,
+    weightedIntrinsic,
+    extrinsicBudget,
+    proactiveDirectives,
+  };
+}
 
 export function clamp01(value: number): number {
   return Math.min(1, Math.max(0, value));

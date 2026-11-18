@@ -23,6 +23,14 @@ export interface WmlAssessment {
   scaffoldingDirectives: string[];
 }
 
+export interface IntrinsicPreGateResult {
+  mode: "OPTIMAL" | "CONSTRAINED" | "INTRINSIC_OVERLOAD";
+  intrinsicLoad: number;
+  weightedIntrinsic: number;
+  extrinsicBudget: number;
+  proactiveDirectives: string[];
+}
+
 export interface OuterFringeResult {
   unlockedNodes: Array<{
     nodeId: string;

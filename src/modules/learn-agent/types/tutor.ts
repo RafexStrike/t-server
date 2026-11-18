@@ -1,10 +1,11 @@
-import type { WmlAssessment } from "./wml.js";
+import type { IntrinsicPreGateResult, WmlAssessment } from "./wml.js";
 
 export interface TutorTurnPromptInput {
   topic: string;
   conceptName: string;
   bloomLevel: number;
   scaffoldingDirectives: string[];
+  preGateResult: IntrinsicPreGateResult;
   previousAttempt?: string;
   tutorFeedback?: string;
 }
@@ -21,6 +22,8 @@ export interface GeneratedTutorTurn {
   bloomLevel: number;
   lesson: MicroLessonPayload;
   wmlAssessment: WmlAssessment;
+  preGate: IntrinsicPreGateResult;
+  regenerated: boolean;
   wasRegeneratedForOverload: boolean;
 }
 

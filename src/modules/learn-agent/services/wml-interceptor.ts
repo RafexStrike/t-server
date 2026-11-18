@@ -5,6 +5,8 @@ import { countTransitiveAncestors } from "../utils/outer-fringe-selector.js";
 import { evaluateWorkingMemoryLoad } from "../utils/wml-calculator.js";
 import type { WmlAssessment } from "../types/wml.js";
 
+export { preGateIntrinsicLoad } from "../utils/wml-calculator.js";
+
 export async function assessNodeTurnWml(params: {
   planId: string;
   userId: string;
