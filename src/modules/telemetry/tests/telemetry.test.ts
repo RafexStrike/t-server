@@ -86,9 +86,10 @@ test(
     const harness = createFetchStub(t);
 
     t.after(async () => {
-      await TelemetryEvent.deleteMany({ planId: plan._id });
-      await PlanNode.deleteMany({ planId: plan._id });
-      await Plan.deleteOne({ _id: plan._id });
+      const planIds = (await Plan.find({ userId: user._id }).select("_id")).map((ownedPlan) => ownedPlan._id);
+      await TelemetryEvent.deleteMany({ planId: { $in: planIds } });
+      await PlanNode.deleteMany({ planId: { $in: planIds } });
+      await Plan.deleteMany({ userId: user._id });
       await User.deleteOne({ _id: user._id });
       await disconnectFromDatabase();
     });
@@ -160,6 +161,45 @@ test(
     assert.ok(jsonEvents.some((event) => event.planId === plan._id.toString() && event.eventType === "lesson_regenerated"));
     assert.ok(jsonEvents.some((event) => event.planId === plan._id.toString() && event.eventType === "attempt_evaluated"));
     assert.ok(jsonEvents.some((event) => event.planId === plan._id.toString() && event.eventType === "diagnostic_completed"));
+
+    const cappedPlan = await Plan.create({
+      userId: user._id,
+      topic: "Diagnostic budget cap",
+      targetDepth: 6,
+      status: "DIAGNOSTIC_IN_PROGRESS",
+    });
+    const cappedNodes = await PlanNode.create(
+      Array.from({ length: 4 }, (_, index) => ({
+        planId: cappedPlan._id,
+        conceptName: `Capped concept ${index + 1}`,
+        bloomLevel: 1,
+        status: "PENDING" as const,
+        prerequisites: [],
+      })),
+    );
+    const cappedNode = await getNextDiagnosticNode(cappedPlan._id.toString(), user._id.toString());
+    assert.ok(cappedNode);
+    harness.enqueue({ question: "What is the first concept?", expectedCriteria: "Explain it." });
+    await generateDiagnosticQuestion(
+      cappedPlan.topic,
+      cappedNode.conceptName,
+      cappedNode.bloomLevel,
+      "test-key",
+      { planId: cappedPlan._id.toString(), userId: user._id.toString(), nodeId: cappedNode._id.toString() },
+    );
+    await PlanNode.updateMany(
+      { planId: cappedPlan._id, status: "PENDING" },
+      { $set: { status: "IN_PROGRESS" } },
+    );
+    assert.equal(await getNextDiagnosticNode(cappedPlan._id.toString(), user._id.toString()), null);
+    const cappedCompletion = await TelemetryEvent.findOne({
+      planId: cappedPlan._id,
+      eventType: "diagnostic_completed",
+    });
+    assert.ok(cappedCompletion);
+    assert.equal(cappedCompletion.metrics?.baselineQuestions, cappedNodes.length);
+    assert.equal(cappedCompletion.metrics?.actualDiagnosticQuestions, 1);
+    assert.equal(cappedCompletion.metrics?.diagnosticQuestionReductionPct, 75);
   },
 );
 

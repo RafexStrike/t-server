@@ -197,6 +197,7 @@ async function runDiagnostics(planId: string, userId: string): Promise<void> {
         { $set: { status: "IN_PROGRESS" } },
       );
       console.log(`[Runner] Diagnostic question budget (${maxQuestions}) reached; remaining pending concepts marked IN_PROGRESS.`);
+      await getNextDiagnosticNode(planId, userId);
       break;
     }
     const node = await getNextDiagnosticNode(planId, userId);
@@ -213,7 +214,14 @@ async function runDiagnostics(planId: string, userId: string): Promise<void> {
     console.log(`[Plan Agent] Concept: ${node.conceptName}`);
     console.log(`[Plan Agent] Bloom level: ${node.bloomLevel} (${bloomLevelName})`);
     console.log(`[Plan Agent] ${diagnosticQuestion.question}`);
-    const userAnswer = await terminal.question("Your answer (or 'skip' if unsure): ");
+    const userAnswer = await terminal.question("Your answer (or 'skip' if unsure, 'exit' to pause): ");
+    if (["exit", "quit"].includes(userAnswer.trim().toLowerCase())) {
+      const resolvedCount = await PlanNode.countDocuments({ planId, status: { $ne: "PENDING" } });
+      console.log(
+        `[Runner] Diagnostics paused after ${questionsAsked} answered question(s); ${resolvedCount} / ${totalNodes} concepts resolved. Resume diagnostics anytime from the main menu.`,
+      );
+      return;
+    }
     questionsAsked += 1;
     const evaluation = await evaluateDiagnosticResponse(
       plan.topic,

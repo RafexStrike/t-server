@@ -190,13 +190,14 @@ async function verifyPlanAndNode(params: {
   }
   const planExists = await Plan.exists({ _id: params.planId, userId: params.userId });
   if (!planExists) throw new Error("Plan not found for the authenticated user.");
-  const [plan, node] = await Promise.all([
+  const [plan, node, learner] = await Promise.all([
     Plan.findOne({ _id: params.planId, userId: params.userId }),
     PlanNode.findOne({ _id: params.nodeId, planId: params.planId }),
+    User.findById(params.userId).select("capacityThreshold"),
   ]);
   if (!plan) throw new Error("Plan not found for the authenticated user.");
   if (!node) throw new Error("Plan node not found in the authenticated user's plan.");
-  return { plan, node };
+  return { plan, node, learner };
 }
 
 export async function prepareNodeLesson(params: {
@@ -210,9 +211,9 @@ export async function prepareNodeLesson(params: {
   scaffoldingDirectives?: string[];
 }): Promise<GeneratedTutorTurn> {
   const startedAt = Date.now();
-  const { plan, node } = await verifyPlanAndNode(params);
+  const { plan, node, learner } = await verifyPlanAndNode(params);
   const effectiveCapacity =
-    params.capacityThreshold ?? plan.capacityThreshold ?? DEFAULT_WML_CAPACITY;
+    params.capacityThreshold ?? learner?.capacityThreshold ?? plan.capacityThreshold ?? DEFAULT_WML_CAPACITY;
   if (node.status === "PENDING") {
     node.status = "IN_PROGRESS";
     await node.save();
@@ -417,7 +418,7 @@ export async function submitNodeAttempt(params: {
   apiKey: string;
 }): Promise<LearnerTurnEvaluation> {
   const startedAt = Date.now();
-  const { plan, node } = await verifyPlanAndNode(params);
+  const { plan, node, learner } = await verifyPlanAndNode(params);
   const evaluationInput: LearnerEvaluationPromptInput = {
     topic: plan.topic,
     conceptName: node.conceptName,
@@ -442,7 +443,7 @@ export async function submitNodeAttempt(params: {
   const tutorFeedback = [result.feedback.trim(), hint].filter(Boolean).join(" ");
   const conceptKey = normalizeConceptName(node.conceptName);
   const activeCapacityThreshold =
-    params.capacityThreshold ?? plan.capacityThreshold ?? DEFAULT_WML_CAPACITY;
+    params.capacityThreshold ?? learner?.capacityThreshold ?? plan.capacityThreshold ?? DEFAULT_WML_CAPACITY;
   let attemptNumber = 0;
   for (let retries = 0; retries < 5; retries += 1) {
     const latestAttempt = await AttemptLog.findOne({

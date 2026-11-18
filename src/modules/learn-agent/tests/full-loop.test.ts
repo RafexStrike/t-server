@@ -153,6 +153,7 @@ test(
         userId: userId!,
         nodeId: nodes[0]._id.toString(),
         apiKey,
+        capacityThreshold: 0.62,
       });
       assert.equal((await PlanNode.findById(nodes[0]._id))?.status, "IN_PROGRESS");
       assert.equal(turn.wasRegeneratedForOverload, false);
@@ -231,6 +232,49 @@ test(
       assert.ok(harness.calls[overloadStart + 1].prompt.includes("Decompose the concept into one atomic sub-step"));
       assert.ok(!harness.calls[overloadStart].prompt.includes("End with a single"));
       harness.assertDrained();
+    });
+
+    await t.test("stateless tutor calls prefer the persisted learner capacity threshold", async () => {
+      const { plan, nodes } = await createPlanFixture(userId!, "Persisted tutor capacity", [
+        { conceptName: "Stored Capacity", bloomLevel: 2, status: "IN_PROGRESS" },
+      ]);
+      await Plan.updateOne({ _id: plan._id }, { $set: { capacityThreshold: 0.67 } });
+      const learner = await User.findById(userId!).select("capacityThreshold");
+      assert.ok(learner);
+      const originalCapacityThreshold = learner.capacityThreshold;
+      await User.updateOne({ _id: userId }, { $set: { capacityThreshold: 0.58 } });
+
+      try {
+        harness.enqueue(simpleLesson);
+        const turn = await prepareNodeLesson({
+          planId: plan._id.toString(),
+          userId: userId!,
+          nodeId: nodes[0]._id.toString(),
+          apiKey,
+        });
+        assert.ok(Math.abs(turn.preGate.extrinsicBudget - 0.525) < 1e-10);
+        assert.equal(turn.wmlAssessment.capacityThreshold, 0.58);
+
+        harness.enqueue({ mastered: false, feedback: "Keep practicing.", hint: null });
+        await submitNodeAttempt({
+          planId: plan._id.toString(),
+          userId: userId!,
+          nodeId: nodes[0]._id.toString(),
+          lesson: turn.lesson,
+          wmlAssessment: turn.wmlAssessment,
+          userAnswer: "A stored-capacity answer",
+          attemptCount: 1,
+          averageWml: turn.wmlAssessment.totalWml,
+          apiKey,
+        });
+        const attemptEvent = await TelemetryEvent.findOne({
+          planId: plan._id,
+          eventType: "attempt_evaluated",
+        });
+        assert.equal(attemptEvent?.metrics?.previousThreshold, 0.58);
+      } finally {
+        await User.updateOne({ _id: userId }, { $set: { capacityThreshold: originalCapacityThreshold } });
+      }
     });
 
     await t.test("prepareNodeLesson rejects invalid and unowned identifiers before fetch", async () => {
