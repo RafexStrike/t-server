@@ -20,6 +20,10 @@ export interface PlanNodeDocument extends Document {
   bloomLevel: number;
   status: PlanNodeStatus;
   prerequisites: Types.ObjectId[];
+  attemptCount: number;
+  wmlSamples: number[];
+  lastAttempt?: string;
+  lastTutorFeedback?: string;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -72,6 +76,10 @@ const PlanNodeSchema = new Schema<PlanNodeDocument, PlanNodeModel>(
         message: "Every prerequisite must be a PlanNode ObjectId",
       },
     },
+    attemptCount: { type: Number, default: 0, min: 0 },
+    wmlSamples: { type: [Number], default: [] },
+    lastAttempt: { type: String },
+    lastTutorFeedback: { type: String },
   },
   {
     timestamps: true,

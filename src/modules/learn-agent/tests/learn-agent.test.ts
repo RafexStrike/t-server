@@ -153,6 +153,7 @@ test("Concept names normalize whitespace and casing for durable mastery keys", a
     masteryScore: 0.9,
   });
   await mastery.validate();
+  assert.equal(mastery.conceptKey, "closures");
   assert.equal(mastery.canonicalConceptName, "closures");
 });
 
@@ -340,8 +341,9 @@ test(
     } finally {
       globalThis.fetch = originalFetch;
     }
-    const closureMastery = await UserMastery.find({ userId, canonicalConceptName: "closures" });
+    const closureMastery = await UserMastery.find({ userId, conceptKey: "closures" });
     assert.equal(closureMastery.length, 1);
+    assert.equal(closureMastery[0].conceptKey, "closures");
     assert.equal(closureMastery[0].canonicalConceptName, "closures");
 
     await assert.rejects(

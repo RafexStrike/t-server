@@ -1,6 +1,7 @@
 import { Types } from "mongoose";
 import { fetchWithRetry } from "../../common/utils/retry.js";
 import { normalizeConceptName } from "../../common/utils/normalize-concept-name.js";
+import { User } from "../../auth/models/User.js";
 import { Plan } from "../../plan-agent/models/Plan.js";
 import { PlanNode } from "../../plan-agent/models/PlanNode.js";
 import { UserMastery } from "../../plan-agent/models/UserMastery.js";
@@ -22,6 +23,34 @@ import { assessNodeTurnWml, preGateIntrinsicLoad } from "./wml-interceptor.js";
 
 const GEMINI_ENDPOINT =
   "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite:generateContent";
+
+export async function loadLearningNodeState(
+  planId: string,
+  userId: string,
+  nodeId: string,
+): Promise<{
+  capacityThreshold: number;
+  attemptCount: number;
+  wmlSamples: number[];
+  previousAttempt?: string;
+  tutorFeedback?: string;
+}> {
+  const [plan, learner, node] = await Promise.all([
+    Plan.findOne({ _id: planId, userId }),
+    User.findById(userId).select("capacityThreshold"),
+    PlanNode.findOne({ _id: nodeId, planId }),
+  ]);
+  if (!plan || !learner || !node) {
+    throw new Error("Learning state could not be loaded for the authenticated plan owner.");
+  }
+  return {
+    capacityThreshold: learner.capacityThreshold ?? plan.capacityThreshold ?? DEFAULT_WML_CAPACITY,
+    attemptCount: node.attemptCount ?? 0,
+    wmlSamples: [...(node.wmlSamples ?? [])],
+    ...(node.lastAttempt !== undefined ? { previousAttempt: node.lastAttempt } : {}),
+    ...(node.lastTutorFeedback !== undefined ? { tutorFeedback: node.lastTutorFeedback } : {}),
+  };
+}
 
 interface GeminiResponse {
   candidates?: Array<{
@@ -250,6 +279,7 @@ export async function submitNodeAttempt(params: {
   attemptCount: number;
   averageWml: number;
   capacityThreshold?: number;
+  wmlSamples?: number[];
   apiKey: string;
 }): Promise<LearnerTurnEvaluation> {
   const { plan, node } = await verifyPlanAndNode(params);
@@ -279,16 +309,35 @@ export async function submitNodeAttempt(params: {
     averageWml: params.averageWml,
     capacityThreshold: params.capacityThreshold ?? DEFAULT_WML_CAPACITY,
   });
+  const hint = typeof result.hint === "string" ? result.hint.trim() : "";
+  const tutorFeedback = [result.feedback.trim(), hint].filter(Boolean).join(" ");
   await Plan.findByIdAndUpdate(params.planId, {
     $set: { capacityThreshold: calculation.updatedCapacityThreshold },
   });
+  await Promise.all([
+    User.updateOne(
+      { _id: params.userId },
+      { $set: { capacityThreshold: calculation.updatedCapacityThreshold } },
+    ),
+    PlanNode.updateOne(
+      { _id: node._id, planId: params.planId },
+      {
+        $set: {
+          attemptCount: params.attemptCount,
+          wmlSamples: params.wmlSamples ?? node.wmlSamples ?? [],
+          lastAttempt: params.userAnswer,
+          lastTutorFeedback: tutorFeedback,
+          status: result.mastered ? "MASTERED" : "IN_PROGRESS",
+        },
+      },
+    ),
+  ]);
 
   if (result.mastered) {
-    node.status = "MASTERED";
-    await node.save();
+    const conceptKey = node.conceptName.trim().toLowerCase();
     const existing = await UserMastery.findOne({
       userId: params.userId,
-      canonicalConceptName: normalizeConceptName(node.conceptName),
+      conceptKey,
     });
     const masteryScore = Math.max(
       existing?.masteryScore ?? 0,
@@ -297,12 +346,13 @@ export async function submitNodeAttempt(params: {
     await UserMastery.updateOne(
       {
         userId: params.userId,
-        canonicalConceptName: normalizeConceptName(node.conceptName),
+        conceptKey,
       },
       {
         $set: {
           userId: params.userId,
           conceptName: node.conceptName,
+          conceptKey,
           canonicalConceptName: normalizeConceptName(node.conceptName),
           masteryScore,
         },
@@ -315,7 +365,6 @@ export async function submitNodeAttempt(params: {
   console.log(
     `[Learn Agent][System 2] Concept="${node.conceptName}" | Mastered=${result.mastered} | Efficiency=${calculation.efficiencyScore.toFixed(2)} | Mastery=${masteryScore.toFixed(2)} | Capacity=${calculation.updatedCapacityThreshold.toFixed(2)}.`,
   );
-  const hint = typeof result.hint === "string" ? result.hint.trim() : "";
   return {
     mastered: result.mastered,
     feedback: result.feedback.trim(),

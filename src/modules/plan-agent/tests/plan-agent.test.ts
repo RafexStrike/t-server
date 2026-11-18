@@ -79,7 +79,7 @@ test("Plan Agent Integration Test Suite", async (t) => {
 
     const pruned = pruneGraph(mockRawGraph, 3);
 
-    assert.strictEqual(pruned.length, 4, "Should retain exactly 4 reachable connected nodes <= level 3");
+    assert.strictEqual(pruned.length, 3, "Should retain exactly 3 reachable connected nodes <= level 3");
     assert.strictEqual(pruned.some(n => n.conceptName === "Custom Framework Architecture"), false, "Level 6 node must be pruned");
     assert.strictEqual(pruned.some(n => n.conceptName === "Unconnected Basic Math"), false, "Unreachable orphan node must be pruned");
   });

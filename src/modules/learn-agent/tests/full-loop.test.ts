@@ -5,7 +5,6 @@ import { Types } from "mongoose";
 import { connectToDatabase, disconnectFromDatabase } from "../../../config/db.js";
 import { User } from "../../auth/models/User.js";
 import { registerUser } from "../../auth/services/auth-service.js";
-import { normalizeConceptName } from "../../common/utils/normalize-concept-name.js";
 import { Plan } from "../../plan-agent/models/Plan.js";
 import { PlanNode } from "../../plan-agent/models/PlanNode.js";
 import { UserLearningSlots } from "../../plan-agent/models/UserLearningSlots.js";
@@ -19,7 +18,7 @@ import {
 import { processDiagnosticAnswer } from "../../plan-agent/services/diagnostic-evaluator.js";
 import { createLearningPlan } from "../../plan-agent/services/plan-service.js";
 import { getOuterFringe } from "../services/outer-fringe.js";
-import { prepareNodeLesson, submitNodeAttempt } from "../services/micro-tutor.js";
+import { loadLearningNodeState, prepareNodeLesson, submitNodeAttempt } from "../services/micro-tutor.js";
 
 interface GeminiRequestBody {
   systemInstruction?: { parts?: Array<{ text?: string }> };
@@ -260,14 +259,28 @@ test(
         userAnswer: "It copies the value.",
         attemptCount: 1,
         averageWml: 0.5,
-        capacityThreshold: 0.70,
+        capacityThreshold: 0.74,
+        wmlSamples: [0.5],
         apiKey,
       });
       assert.equal(failed.mastered, false);
-      assert.equal((await PlanNode.findById(nodeId))?.status, "IN_PROGRESS");
+      const failedNode = await PlanNode.findById(nodeId);
+      assert.equal(failedNode?.status, "IN_PROGRESS");
+      assert.equal(failedNode?.attemptCount, 1);
+      assert.deepEqual(failedNode?.wmlSamples, [0.5]);
+      assert.equal(failedNode?.lastAttempt, "It copies the value.");
+      assert.ok(failedNode?.lastTutorFeedback?.includes("Distinguish retained scope"));
+      assert.ok(failedNode?.lastTutorFeedback?.includes("Track the outer binding."));
+      const resumed = await loadLearningNodeState(plan._id.toString(), userId!, nodeId);
+      assert.equal(resumed.capacityThreshold, 0.74);
+      assert.equal((await User.findById(userId))?.capacityThreshold, 0.74);
+      assert.equal(resumed.attemptCount, 1);
+      assert.deepEqual(resumed.wmlSamples, [0.5]);
+      assert.equal(resumed.previousAttempt, "It copies the value.");
+      assert.ok(resumed.tutorFeedback?.includes("Distinguish retained scope"));
       assert.equal(await UserMastery.countDocuments({
         userId,
-        canonicalConceptName: normalizeConceptName("Lexical Scope"),
+        conceptKey: "lexical scope",
       }), 0);
 
       const requestStart = harness.requests.length;
@@ -311,7 +324,7 @@ test(
         assert.equal((await PlanNode.findById(nodes[index]._id))?.status, "MASTERED");
         assert.equal((await UserMastery.findOne({
           userId,
-          canonicalConceptName: normalizeConceptName(masteryDefinitions[index].conceptName),
+          conceptKey: masteryDefinitions[index].conceptName.trim().toLowerCase(),
         }))?.masteryScore, expectedScore);
       }
 
@@ -333,7 +346,7 @@ test(
       assert.equal(laterEvaluation.masteryScore, 0.86);
       assert.equal((await UserMastery.findOne({
         userId,
-        canonicalConceptName: normalizeConceptName("Attempt 1 Mastery"),
+        conceptKey: "attempt 1 mastery",
       }))?.masteryScore, 0.95);
     });
 

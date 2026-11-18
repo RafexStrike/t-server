@@ -5,6 +5,7 @@ export interface UserDocument extends Document {
   email: string;
   passwordHash: string;
   name?: string;
+  capacityThreshold: number;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -22,6 +23,7 @@ const UserSchema = new Schema<UserDocument, UserModel>(
     },
     passwordHash: { type: String, required: true, select: false },
     name: { type: String, trim: true },
+    capacityThreshold: { type: Number, default: 0.70, min: 0.30, max: 0.95 },
   },
   { timestamps: true, versionKey: false },
 );

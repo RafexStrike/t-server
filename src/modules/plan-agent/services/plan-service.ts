@@ -3,7 +3,7 @@ import { Plan } from "../models/Plan.js";
 import { PlanNode } from "../models/PlanNode.js";
 import { User } from "../../auth/models/User.js";
 import { generateAbsoluteMasteryGraph } from "./graph-generator.js";
-import { pruneGraph } from "../utils/graph-pruner.js";
+import { breakPrerequisiteCycles, pruneGraph } from "../utils/graph-pruner.js";
 
 /**
  * Generates and stores a user's requested learning plan and its prerequisite
@@ -68,6 +68,22 @@ export async function createLearningPlan(
   await plan.save();
   console.log(`[Plan Agent] Plan ${plan._id.toString()} persisted for user ${ownerId.toString()}.`);
   try {
+    const acyclicGraph = breakPrerequisiteCycles(prunedGraph);
+    const acyclicPrerequisitesById = new Map(
+      acyclicGraph.map((node) => [
+        nodeIdsByName.get(node.conceptName)!.toString(),
+        node.prerequisiteNames.map((name) => {
+          const prerequisiteId = nodeIdsByName.get(name);
+          if (!prerequisiteId) throw new Error(`Prerequisite "${name}" was not present in the pruned graph.`);
+          return prerequisiteId;
+        }),
+      ]),
+    );
+    for (const node of nodesToInsert) {
+      const prerequisites = acyclicPrerequisitesById.get((node._id as Types.ObjectId).toString());
+      if (!prerequisites) throw new Error("A persisted node could not be matched to its graph concept.");
+      node.prerequisites = prerequisites;
+    }
     await PlanNode.insertMany(nodesToInsert);
     console.log(
       `[Plan Agent] Inserted ${nodesToInsert.length} PlanNode documents for user ${ownerId.toString()}.`,

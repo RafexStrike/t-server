@@ -1,4 +1,4 @@
-import "dotenv/config";
+import "../../../config/env.js";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { chmod, readFile, unlink, writeFile } from "node:fs/promises";
@@ -28,6 +28,7 @@ import {
 import { createLearningPlan } from "../services/plan-service.js";
 import { getOuterFringe } from "../../learn-agent/services/outer-fringe.js";
 import {
+  loadLearningNodeState,
   prepareNodeLesson,
   submitNodeAttempt,
 } from "../../learn-agent/services/micro-tutor.js";
@@ -272,10 +273,16 @@ async function runLearningSession(planId: string, userId: string): Promise<void>
       `[Runner] Outer Fringe candidates: ${fringe.unlockedNodes.length} | Selected: ${selected.conceptName} (Bloom ${selected.bloomLevel}) | Remaining: ${fringe.remainingCount}.`,
     );
 
-    let attemptCount = 1;
-    let previousAttempt: string | undefined;
-    let tutorFeedback: string | undefined;
-    const wmlSamples: number[] = [];
+    await PlanNode.updateOne(
+      { _id: selected.nodeId, planId },
+      { $set: { status: "IN_PROGRESS" } },
+    );
+    const savedState = await loadLearningNodeState(planId, userId, selected.nodeId);
+    capacityThreshold = savedState.capacityThreshold;
+    let attemptCount = savedState.attemptCount + 1;
+    let previousAttempt = savedState.previousAttempt;
+    let tutorFeedback = savedState.tutorFeedback;
+    const wmlSamples = savedState.wmlSamples;
     let shouldExit = false;
 
     while (true) {
@@ -324,6 +331,7 @@ async function runLearningSession(planId: string, userId: string): Promise<void>
         attemptCount,
         averageWml,
         capacityThreshold,
+        wmlSamples,
         apiKey,
       });
       capacityThreshold = evaluation.updatedCapacityThreshold;

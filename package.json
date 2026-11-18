@@ -7,7 +7,7 @@
     "dev": "tsx watch src/server.ts",
     "build": "tsc",
     "start": "node dist/server.js",
-    "test-plan-agent": "node --import tsx --test src/modules/plan-agent/tests/plan-agent.test.ts",
+    "test-plan-agent": "node --import tsx --test src/modules/plan-agent/tests/*.test.ts",
     "test-learn-agent": "node --import tsx --test src/modules/learn-agent/tests/learn-agent.test.ts",
     "test-full-loop": "node --import tsx --test src/modules/learn-agent/tests/full-loop.test.ts",
     "runner": "tsx src/modules/plan-agent/runner/plan-runner.ts"
@@ -15,7 +15,6 @@
   "keywords": [],
   "type": "module",
   "dependencies": {
-    "better-auth": "^1.7.15",
     "cors": "^2.8.6",
     "dotenv": "^18.0.9",
     "express": "^5.3.0",

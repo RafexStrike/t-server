@@ -8,6 +8,7 @@ import { normalizeConceptName } from "../../common/utils/normalize-concept-name.
 export interface UserMasteryDocument extends Document {
   userId: string;
   conceptName: string;
+  conceptKey: string;
   canonicalConceptName: string;
   masteryScore: number;
   createdAt: Date;
@@ -29,6 +30,12 @@ const UserMasterySchema = new Schema<UserMasteryDocument, UserMasteryModel>(
       required: [true, "A concept name is required"],
       trim: true,
       minlength: [1, "A concept name cannot be empty"],
+    },
+    conceptKey: {
+      type: String,
+      required: true,
+      trim: true,
+      lowercase: true,
     },
     canonicalConceptName: {
       type: String,
@@ -52,12 +59,13 @@ const UserMasterySchema = new Schema<UserMasteryDocument, UserMasteryModel>(
 
 UserMasterySchema.pre("validate", function () {
   if (this.conceptName) {
+    this.conceptKey = this.conceptName.trim().toLowerCase();
     this.canonicalConceptName = normalizeConceptName(this.conceptName);
   }
 });
 
-// One current mastery estimate per user/canonical concept pair.
-UserMasterySchema.index({ userId: 1, canonicalConceptName: 1 }, { unique: true });
+// One current mastery estimate per user/concept key pair.
+UserMasterySchema.index({ userId: 1, conceptKey: 1 }, { unique: true });
 
 /** Reuse the compiled model during hot reloads and repeated imports. */
 export const UserMastery: UserMasteryModel =
