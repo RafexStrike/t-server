@@ -135,11 +135,16 @@ export function calculateExtrinsicLoad(
     (codeBlockCharacters + programmingPunctuationCount) / text.length;
   const codeDensityFactor = clamp01(codeRatio / 0.35);
 
-  const lowerText = text.toLowerCase();
   const matchedConcepts = new Set(
     unmasteredConceptNames
       .filter((name) => name.trim().length > 0)
-      .filter((name) => lowerText.includes(name.toLowerCase())),
+      .filter((name) => {
+        const escapedName = name.trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+        return new RegExp(
+          `(?<![a-zA-Z0-9_])${escapedName}(?![a-zA-Z0-9_])`,
+          "i",
+        ).test(text);
+      }),
   );
   const novelTermFactor = clamp01(matchedConcepts.size / 3);
 

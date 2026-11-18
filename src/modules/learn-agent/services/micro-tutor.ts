@@ -47,7 +47,7 @@ export async function loadLearningNodeState(
   const previousAttempt = latestFailedAttempt?.learnerAnswer ?? node.lastAttempt;
   const tutorFeedback = latestFailedAttempt?.tutorFeedback ?? node.lastTutorFeedback;
   return {
-    capacityThreshold: learner.wmlCapacityThreshold ?? plan.capacityThreshold ?? DEFAULT_WML_CAPACITY,
+    capacityThreshold: learner.capacityThreshold ?? plan.capacityThreshold ?? DEFAULT_WML_CAPACITY,
     attemptCount: node.attemptCount ?? 0,
     wmlSamples: [...(node.wmlSamples ?? [])],
     ...(previousAttempt !== undefined ? { previousAttempt } : {}),
@@ -167,8 +167,11 @@ export async function prepareNodeLesson(params: {
   capacityThreshold?: number;
   previousAttempt?: string;
   tutorFeedback?: string;
+  scaffoldingDirectives?: string[];
 }): Promise<GeneratedTutorTurn> {
   const { plan, node } = await verifyPlanAndNode(params);
+  const effectiveCapacity =
+    params.capacityThreshold ?? plan.capacityThreshold ?? DEFAULT_WML_CAPACITY;
   if (node.status === "PENDING") {
     node.status = "IN_PROGRESS";
     await node.save();
@@ -202,19 +205,25 @@ export async function prepareNodeLesson(params: {
     directPrerequisiteCount: node.prerequisites.length,
     transitiveAncestorCount: countTransitiveAncestors(node._id.toString(), graphNodes),
     unmasteredPrerequisites,
-    capacityThreshold: params.capacityThreshold,
+    capacityThreshold: effectiveCapacity,
   });
   console.log(
     `[Learn Agent][System 1 Pre-Gate] Node="${node.conceptName}" bloom=${node.bloomLevel} IL=${preGate.intrinsicLoad.toFixed(2)} budget=${preGate.extrinsicBudget.toFixed(2)} mode=${preGate.mode}`,
   );
 
   const remediation = previousAttempt !== undefined && tutorFeedback !== undefined;
-  const initialDirectives = remediation
-    ? [
+  const initialDirectives = [...new Set([
+    ...(remediation
+      ? [
         "Use high scaffolding: isolate the learner's misconception, explain one small step, and provide a concrete example.",
         "Keep the explanation concise and do not introduce adjacent concepts.",
       ]
-    : preGate.proactiveDirectives;
+      : preGate.proactiveDirectives),
+    ...(params.scaffoldingDirectives ?? []),
+    ...(preGate.intrinsicLoad >= 0.65
+      ? ["Decompose the concept into one atomic sub-step and anchor it in a concrete real-world analogy before introducing formal rules."]
+      : []),
+  ])];
   const promptParams = {
     topic: plan.topic,
     conceptName: node.conceptName,
@@ -238,7 +247,7 @@ export async function prepareNodeLesson(params: {
     userId: params.userId,
     nodeId: params.nodeId,
     textToMeasure: `${lesson.explanation}\n\n${lesson.checkQuestion}`,
-    capacityThreshold: params.capacityThreshold,
+    capacityThreshold: effectiveCapacity,
   });
   let wasRegeneratedForOverload = false;
 
@@ -260,7 +269,7 @@ export async function prepareNodeLesson(params: {
       userId: params.userId,
       nodeId: params.nodeId,
       textToMeasure: `${lesson.explanation}\n\n${lesson.checkQuestion}`,
-      capacityThreshold: params.capacityThreshold,
+      capacityThreshold: effectiveCapacity,
     });
     wasRegeneratedForOverload = true;
   }
@@ -324,7 +333,7 @@ export async function submitNodeAttempt(params: {
   await Promise.all([
     User.updateOne(
       { _id: params.userId },
-      { $set: { wmlCapacityThreshold: calculation.updatedCapacityThreshold } },
+      { $set: { capacityThreshold: calculation.updatedCapacityThreshold } },
     ),
     PlanNode.updateOne(
       { _id: node._id, planId: params.planId },
@@ -351,28 +360,20 @@ export async function submitNodeAttempt(params: {
   ]);
 
   if (result.mastered) {
-    const conceptKey = node.conceptName.trim().toLowerCase();
-    const existing = await UserMastery.findOne({
-      userId: params.userId,
-      conceptKey,
-    });
-    const masteryScore = Math.max(
-      existing?.masteryScore ?? 0,
-      calculation.durableMasteryScore,
-    );
+    const conceptKey = normalizeConceptName(node.conceptName);
     await UserMastery.updateOne(
       {
         userId: params.userId,
         conceptKey,
       },
       {
-        $set: {
+        $setOnInsert: {
           userId: params.userId,
           conceptName: node.conceptName,
           conceptKey,
           canonicalConceptName: normalizeConceptName(node.conceptName),
-          masteryScore,
         },
+        $max: { masteryScore: calculation.durableMasteryScore },
       },
       { upsert: true },
     );

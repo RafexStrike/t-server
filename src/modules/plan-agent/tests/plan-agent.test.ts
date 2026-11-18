@@ -12,9 +12,33 @@ import { PlanNode } from "../models/PlanNode.js";
 import { User } from "../../auth/models/User.js";
 import { UserLearningSlots } from "../models/UserLearningSlots.js";
 import { registerUser, verifySessionToken } from "../../auth/services/auth-service.js";
+import { env, validateEnv } from "../../../config/env.js";
+import { parsePlanChoice } from "../runner/plan-choice.js";
 
 const apiKey = process.env.GEMINI_API_KEY || "";
 let testUserId = "";
+
+test("CLI plan choice rejects empty and out-of-range input", () => {
+  assert.equal(parsePlanChoice("   ", 2), undefined);
+  assert.equal(parsePlanChoice("3", 2), undefined);
+  assert.equal(parsePlanChoice("0", 2), 0);
+  assert.equal(parsePlanChoice(" 2 ", 2), 2);
+});
+
+test("Environment validation allows complete MongoDB URIs without separate credentials", () => {
+  assert.doesNotThrow(() => validateEnv({
+    ...env,
+    MONGODB_URI: "mongodb://localhost:27017/thesis",
+    MONGODB_USERNAME: undefined,
+    MONGODB_PASSWORD: undefined,
+  }));
+  assert.throws(() => validateEnv({
+    ...env,
+    MONGODB_URI: undefined,
+    MONGODB_USERNAME: undefined,
+    MONGODB_PASSWORD: "secret",
+  }), /MONGODB_USERNAME/);
+});
 
 test("Plan Agent Integration Test Suite", async (t) => {
   // 1. Ensure Database Connection
@@ -82,6 +106,22 @@ test("Plan Agent Integration Test Suite", async (t) => {
     assert.strictEqual(pruned.length, 3, "Should retain exactly 3 reachable connected nodes <= level 3");
     assert.strictEqual(pruned.some(n => n.conceptName === "Custom Framework Architecture"), false, "Level 6 node must be pruned");
     assert.strictEqual(pruned.some(n => n.conceptName === "Unconnected Basic Math"), false, "Unreachable orphan node must be pruned");
+  });
+
+  await t.test("PlanService: Rejects a graph with no valid nodes before persistence", async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async () => new Response(JSON.stringify({
+      candidates: [{ content: { parts: [{ text: "[]" }] } }],
+    }), { status: 200, headers: { "Content-Type": "application/json" } });
+    try {
+      await assert.rejects(
+        createLearningPlan(testUserId, "Empty graph test", 2, "test-key"),
+        /graph pruning produced 0 valid nodes at targetDepth 2/,
+      );
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+    assert.equal(await Plan.countDocuments({ userId: testUserId }), 0);
   });
 
   // 4. Test End-to-End Plan Creation & Database Ingestion

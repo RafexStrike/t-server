@@ -1,5 +1,9 @@
 import type { RawGraphNode } from "../types/graph.js";
 
+function normalizedConceptKey(conceptName: string): string {
+  return conceptName.trim().replace(/\s+/g, " ").toLowerCase();
+}
+
 /**
  * Retains the new learning outcomes at the requested Bloom depth and exactly
  * the prerequisite ancestors needed to reach those outcomes.
@@ -8,7 +12,21 @@ export function pruneGraph(
   rawGraph: RawGraphNode[],
   targetDepth: number,
 ): RawGraphNode[] {
-  const filteredNodes = rawGraph.filter((node) => node.bloomLevel <= targetDepth);
+  const uniqueNodesByKey = new Map<string, RawGraphNode>();
+  for (const node of rawGraph) {
+    if (node.bloomLevel > targetDepth) continue;
+    const key = normalizedConceptKey(node.conceptName);
+    if (!uniqueNodesByKey.has(key)) uniqueNodesByKey.set(key, node);
+  }
+  const canonicalNamesByKey = new Map(
+    [...uniqueNodesByKey].map(([key, node]) => [key, node.conceptName]),
+  );
+  const filteredNodes = [...uniqueNodesByKey.values()].map((node) => ({
+    ...node,
+    prerequisiteNames: node.prerequisiteNames.map(
+      (name) => canonicalNamesByKey.get(normalizedConceptKey(name)) ?? name,
+    ),
+  }));
   const nodesByName = new Map(
     filteredNodes.map((node) => [node.conceptName, node]),
   );
@@ -56,7 +74,9 @@ export function pruneGraph(
     visitAncestors(sink.conceptName);
   }
 
-  return filteredNodes.filter((node) => requiredNames.has(node.conceptName));
+  return breakPrerequisiteCycles(
+    filteredNodes.filter((node) => requiredNames.has(node.conceptName)),
+  );
 }
 
 /** Breaks prerequisite back-edges deterministically and verifies the result. */

@@ -13,6 +13,16 @@ export interface OuterFringeNode {
   prerequisiteIds: string[];
 }
 
+export type LearningFringeState = "COMPLETED" | "BLOCKED" | "READY";
+
+export function getLearningFringeState(
+  fringe: Pick<OuterFringeResult, "isPlanCompleted" | "nextNodeId">,
+): LearningFringeState {
+  if (fringe.isPlanCompleted) return "COMPLETED";
+  if (!fringe.nextNodeId) return "BLOCKED";
+  return "READY";
+}
+
 export function selectOuterFringe(
   nodes: OuterFringeNode[],
   satisfiedStatuses: ReadonlySet<string> = KNOWLEDGE_FRONTIER_SATISFIED,

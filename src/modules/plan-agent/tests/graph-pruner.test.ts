@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { breakPrerequisiteCycles } from "../utils/graph-pruner.js";
+import { breakPrerequisiteCycles, pruneGraph } from "../utils/graph-pruner.js";
 import type { RawGraphNode } from "../types/graph.js";
 
 function assertRootReachableDag(nodes: RawGraphNode[]): void {
@@ -31,6 +31,30 @@ function assertRootReachableDag(nodes: RawGraphNode[]): void {
   }
   assert.equal(visited.size, nodes.length);
 }
+
+test("pruneGraph breaks reachable prerequisite cycles before returning nodes", () => {
+  const result = pruneGraph([
+    { conceptName: "A", bloomLevel: 1, prerequisiteNames: ["B"] },
+    { conceptName: "B", bloomLevel: 2, prerequisiteNames: ["A"] },
+    { conceptName: "Goal", bloomLevel: 3, prerequisiteNames: ["A"] },
+  ], 3);
+
+  assertRootReachableDag(result);
+  assert.deepEqual(result.map((node) => node.prerequisiteNames), [["B"], [], ["A"]]);
+});
+
+test("pruneGraph deduplicates normalized concepts and rewrites prerequisite aliases", () => {
+  const result = pruneGraph([
+    { conceptName: "Core   Concept", bloomLevel: 1, prerequisiteNames: [] },
+    { conceptName: "core concept", bloomLevel: 1, prerequisiteNames: [] },
+    { conceptName: "Goal", bloomLevel: 2, prerequisiteNames: [" CORE CONCEPT "] },
+  ], 2);
+
+  assert.equal(result.length, 2);
+  assert.deepEqual(result.map((node) => node.conceptName), ["Core   Concept", "Goal"]);
+  assert.deepEqual(result[1].prerequisiteNames, ["Core   Concept"]);
+  assertRootReachableDag(result);
+});
 
 test("breakPrerequisiteCycles turns two-node cycles into root-reachable DAGs", () => {
   const input: RawGraphNode[] = [

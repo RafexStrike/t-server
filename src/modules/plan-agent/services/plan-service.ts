@@ -30,6 +30,11 @@ export async function createLearningPlan(
 
   console.log(`[Plan Agent] Pruning graph to Bloom level ${targetDepth}.`);
   const prunedGraph = pruneGraph(rawGraph, targetDepth);
+  if (prunedGraph.length === 0) {
+    throw new Error(
+      `Cannot create learning plan for "${topic}": graph pruning produced 0 valid nodes at targetDepth ${targetDepth}.`,
+    );
+  }
   console.log(
     `[Plan Agent] Graph pruning complete: ${rawGraph.length} raw nodes, ${prunedGraph.length} retained nodes, ${rawGraph.length - prunedGraph.length} pruned.`,
   );

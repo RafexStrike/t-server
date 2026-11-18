@@ -164,6 +164,7 @@ test(
       const { plan, nodes } = await createPlanFixture(userId!, "Tutor capacity", [
         { conceptName: "Basic Recall", bloomLevel: 1 },
       ]);
+      await Plan.updateOne({ _id: plan._id }, { $set: { capacityThreshold: 0.62 } });
       const requestStart = harness.requests.length;
       harness.enqueue(simpleLesson);
       const turn = await prepareNodeLesson({
@@ -171,12 +172,27 @@ test(
         userId: userId!,
         nodeId: nodes[0]._id.toString(),
         apiKey,
-        capacityThreshold: 0.90,
       });
       assert.equal((await PlanNode.findById(nodes[0]._id))?.status, "IN_PROGRESS");
       assert.equal(turn.wasRegeneratedForOverload, false);
+      assert.equal(turn.preGate.extrinsicBudget, 0.62);
+      assert.equal(turn.wmlAssessment.capacityThreshold, 0.62);
       assert.equal(harness.requests.length - requestStart, 1);
       assert.ok(harness.requests[requestStart].prompt.includes("Basic Recall"));
+      const lowLoadDirective = turn.wmlAssessment.scaffoldingDirectives.find((directive) =>
+        directive.includes("Learner cognitive load is low"),
+      );
+      assert.ok(lowLoadDirective, "LOW-load directives should be available to the next tutor turn");
+      harness.enqueue(simpleLesson);
+      await prepareNodeLesson({
+        planId: plan._id.toString(),
+        userId: userId!,
+        nodeId: nodes[0]._id.toString(),
+        apiKey,
+        capacityThreshold: 0.90,
+        scaffoldingDirectives: [lowLoadDirective],
+      });
+      assert.ok(harness.requests[harness.requests.length - 1].prompt.includes(lowLoadDirective));
 
       const prerequisiteDefinitions = Array.from({ length: 4 }, (_, index) => ({
         conceptName: `Known prerequisite ${index + 1}`,
@@ -196,6 +212,22 @@ test(
         ],
       );
       const overloadNode = overloadNodes[overloadNodes.length - 1];
+      const upfrontStart = harness.requests.length;
+      harness.enqueue(simpleLesson);
+      const proactiveTurn = await prepareNodeLesson({
+        planId: overloadPlan._id.toString(),
+        userId: userId!,
+        nodeId: overloadNode._id.toString(),
+        apiKey,
+        capacityThreshold: 0.90,
+      });
+      assert.equal(proactiveTurn.wmlAssessment.isOverloaded, false);
+      assert.equal(harness.requests.length - upfrontStart, 1);
+      assert.ok(
+        harness.requests[upfrontStart].prompt.includes(
+          "Decompose the concept into one atomic sub-step",
+        ),
+      );
       const overloadStart = harness.requests.length;
       harness.enqueue(denseLesson);
       harness.enqueue(denseLesson);
@@ -284,7 +316,7 @@ test(
       }]);
       const resumed = await loadLearningNodeState(plan._id.toString(), userId!, nodeId);
       assert.equal(resumed.capacityThreshold, 0.74);
-      assert.equal((await User.findById(userId))?.wmlCapacityThreshold, 0.74);
+      assert.equal((await User.findById(userId))?.capacityThreshold, 0.74);
       assert.equal(resumed.attemptCount, 1);
       assert.deepEqual(resumed.wmlSamples, [0.5]);
       assert.equal(resumed.previousAttempt, "It copies the value.");

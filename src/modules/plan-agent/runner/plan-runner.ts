@@ -1,11 +1,10 @@
-import "../../../config/env.js";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { chmod, readFile, unlink, writeFile } from "node:fs/promises";
 import { createInterface } from "node:readline/promises";
 import { stdin, stdout } from "node:process";
 import { Types } from "mongoose";
-import { env } from "../../../config/env.js";
+import { env, validateEnv } from "../../../config/env.js";
 import { connectToDatabase, disconnectFromDatabase } from "../../../config/db.js";
 import { User } from "../../auth/models/User.js";
 import {
@@ -34,6 +33,8 @@ import {
   submitNodeAttempt,
 } from "../../learn-agent/services/micro-tutor.js";
 import { DEFAULT_WML_CAPACITY } from "../../learn-agent/utils/wml-calculator.js";
+import { getLearningFringeState } from "../../learn-agent/utils/outer-fringe-selector.js";
+import { parsePlanChoice } from "./plan-choice.js";
 
 const sessionPath = join(homedir(), ".plan-agent-session.json");
 const terminal = createInterface({ input: stdin, output: stdout });
@@ -144,6 +145,9 @@ async function authenticate(): Promise<{ userId: string; email: string }> {
       console.log(`[Runner] Signed in as ${result.user.email}; local session saved securely.`);
       return { userId: result.user.userId, email: result.user.email };
     } catch (error) {
+      if (error instanceof Error && error.name === "AbortError") {
+        throw error;
+      }
       console.error(`[Runner] Authentication failed: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
@@ -243,9 +247,9 @@ async function runLearningSession(planId: string, userId: string): Promise<void>
   const apiKey = env.GEMINI_API_KEY ?? "";
   const plan = await Plan.findOne({ _id: planId, userId });
   if (!plan) throw new Error(`Plan ${planId} could not be loaded for its owner.`);
-  const learner = await User.findOne({ _id: userId }).select("wmlCapacityThreshold");
+  const learner = await User.findOne({ _id: userId }).select("capacityThreshold");
   if (!learner) throw new Error("Authenticated user could not be loaded for the learning session.");
-  let capacityThreshold = learner.wmlCapacityThreshold ?? plan.capacityThreshold ?? DEFAULT_WML_CAPACITY;
+  let capacityThreshold = learner.capacityThreshold ?? DEFAULT_WML_CAPACITY;
 
   console.log("=== Phase 2: Micro-Tutor Learning Session ===");
   while (true) {
@@ -253,7 +257,8 @@ async function runLearningSession(planId: string, userId: string): Promise<void>
     const totalNodes = await PlanNode.countDocuments({ planId });
     const completedCount = totalNodes - fringe.remainingCount;
     const currentNodeNumber = completedCount + 1;
-    if (fringe.isPlanCompleted || !fringe.nextNodeId) {
+    const fringeState = getLearningFringeState(fringe);
+    if (fringeState === "COMPLETED") {
       const [plan, diagnosticPassedCount, tutoredMasteredCount] = await Promise.all([
         Plan.findOne({ _id: planId, userId }),
         PlanNode.countDocuments({ planId, status: "PASSED_IN_DIAGNOSTIC" }),
@@ -267,6 +272,12 @@ async function runLearningSession(planId: string, userId: string): Promise<void>
         `  - Completed during diagnosis: ${diagnosticPassedCount}`,
         `  - Mastered via Micro-Tutor:   ${tutoredMasteredCount}`,
       ]);
+      break;
+    }
+    if (fringeState === "BLOCKED") {
+      console.error(
+        `[Runner][Graph Deadlock] No unlocked learning nodes remain, but ${fringe.remainingCount} node(s) are unfinished for plan ${planId}.`,
+      );
       break;
     }
 
@@ -285,6 +296,7 @@ async function runLearningSession(planId: string, userId: string): Promise<void>
     let attemptCount = savedState.attemptCount + 1;
     let previousAttempt = savedState.previousAttempt;
     let tutorFeedback = savedState.tutorFeedback;
+    let scaffoldingDirectives: string[] = [];
     const wmlSamples = savedState.wmlSamples;
     let shouldExit = false;
 
@@ -297,7 +309,12 @@ async function runLearningSession(planId: string, userId: string): Promise<void>
         capacityThreshold,
         ...(previousAttempt !== undefined ? { previousAttempt } : {}),
         ...(tutorFeedback !== undefined ? { tutorFeedback } : {}),
+        ...(scaffoldingDirectives.length > 0 ? { scaffoldingDirectives } : {}),
       });
+      scaffoldingDirectives = [...new Set([
+        ...scaffoldingDirectives,
+        ...turn.wmlAssessment.scaffoldingDirectives,
+      ])];
       wmlSamples.push(turn.wmlAssessment.totalWml);
       console.log();
       const bloomLevelName = BLOOM_LEVEL_NAMES[selected.bloomLevel - 1] ?? "Unknown";
@@ -356,7 +373,8 @@ async function runLearningSession(planId: string, userId: string): Promise<void>
 }
 
 async function main(): Promise<void> {
-  await connectToDatabase();
+  const config = validateEnv();
+  await connectToDatabase(config.MONGODB_URI);
   const { userId, email } = await authenticate();
   if (!Types.ObjectId.isValid(userId)) throw new Error("Authenticated user id is invalid.");
 
@@ -386,7 +404,14 @@ async function main(): Promise<void> {
   });
   console.log("  [0] Start a new plan");
 
-  const choice = Number((await terminal.question("Choose a plan: ")).trim());
+  let choice: number | undefined;
+  while (choice === undefined) {
+    const rawChoice = await terminal.question("Choose a plan: ");
+    choice = parsePlanChoice(rawChoice, activePlans.length);
+    if (choice === undefined) {
+      console.error("[Runner] Invalid choice. Enter 0 or the number of a listed plan.");
+    }
+  }
   let planId: string;
   if (choice === 0) {
     planId = await createPlanForUser(userId);

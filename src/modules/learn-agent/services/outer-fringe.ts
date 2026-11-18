@@ -2,6 +2,7 @@ import { Types } from "mongoose";
 import { Plan } from "../../plan-agent/models/Plan.js";
 import { PlanNode } from "../../plan-agent/models/PlanNode.js";
 import { UserMastery } from "../../plan-agent/models/UserMastery.js";
+import { normalizeConceptName } from "../../common/utils/normalize-concept-name.js";
 import type { OuterFringeResult } from "../types/wml.js";
 import {
   KNOWLEDGE_FRONTIER_SATISFIED,
@@ -33,7 +34,7 @@ export async function syncPriorUserMastery(
   const priorMastery = await UserMastery.find({
     userId,
     conceptKey: {
-      $in: unresolvedNodes.map((node) => node.conceptName.trim().toLowerCase()),
+      $in: unresolvedNodes.map((node) => normalizeConceptName(node.conceptName)),
     },
     masteryScore: { $gte: PRIOR_MASTERY_THRESHOLD },
   }).select("conceptKey");
@@ -45,10 +46,10 @@ export async function syncPriorUserMastery(
   }
 
   const masteredConceptNames = new Set(
-    priorMastery.map((mastery) => mastery.conceptKey),
+    priorMastery.map((mastery) => normalizeConceptName(mastery.conceptKey)),
   );
   const matchingNodeIds = unresolvedNodes
-    .filter((node) => masteredConceptNames.has(node.conceptName.trim().toLowerCase()))
+    .filter((node) => masteredConceptNames.has(normalizeConceptName(node.conceptName)))
     .map((node) => node._id);
   if (matchingNodeIds.length === 0) return 0;
   const result = await PlanNode.updateMany(

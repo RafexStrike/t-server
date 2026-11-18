@@ -5,7 +5,7 @@ export interface UserDocument extends Document {
   email: string;
   passwordHash: string;
   name?: string;
-  wmlCapacityThreshold: number;
+  capacityThreshold: number;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -23,7 +23,7 @@ const UserSchema = new Schema<UserDocument, UserModel>(
     },
     passwordHash: { type: String, required: true, select: false },
     name: { type: String, trim: true },
-    wmlCapacityThreshold: { type: Number, default: 0.70, min: 0.30, max: 0.95 },
+    capacityThreshold: { type: Number, default: 0.70, min: 0.45, max: 0.90 },
   },
   { timestamps: true, versionKey: false },
 );

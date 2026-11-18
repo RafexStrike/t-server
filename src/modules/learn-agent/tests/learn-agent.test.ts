@@ -10,7 +10,7 @@ import { UserMastery } from "../../plan-agent/models/UserMastery.js";
 import { getOuterFringe, syncPriorUserMastery } from "../services/outer-fringe.js";
 import { prepareNodeLesson, submitNodeAttempt } from "../services/micro-tutor.js";
 import { calculateCognitiveEfficiency } from "../utils/cognitive-efficiency.js";
-import { selectOuterFringe } from "../utils/outer-fringe-selector.js";
+import { getLearningFringeState, selectOuterFringe } from "../utils/outer-fringe-selector.js";
 import {
   calculateExtrinsicLoad,
   calculateIntrinsicLoad,
@@ -79,6 +79,11 @@ test("WML calculator scores intrinsic and extrinsic load and produces overload s
   assert.ok(extrinsic.codeDensityFactor > 0);
   assert.ok(extrinsic.novelTermFactor > 0);
 
+  const shortTerms = calculateExtrinsicLoad("setup and random values", ["Set", "Map", "DOM"]);
+  assert.equal(shortTerms.novelTermFactor, 0, "short terms must not match inside longer words");
+  const punctuatedTerms = calculateExtrinsicLoad("C++ and Node.js", ["C++", "Node.js"]);
+  assert.equal(punctuatedTerms.novelTermFactor, 2 / 3);
+
   const assessment = evaluateWorkingMemoryLoad({
     bloomLevel: 6,
     directPrerequisiteCount: 4,
@@ -113,6 +118,11 @@ test("Outer Fringe prioritizes in-progress nodes, gates prerequisites, and detec
   assert.equal(completed.isPlanCompleted, true);
   assert.equal(completed.nextNodeId, null);
   assert.equal(completed.remainingCount, 0);
+  assert.equal(getLearningFringeState(completed), "COMPLETED");
+  assert.equal(
+    getLearningFringeState({ isPlanCompleted: false, nextNodeId: null }),
+    "BLOCKED",
+  );
 });
 
 test("System 2 efficiency normalizes Paas scoring, bounds capacity, and preserves durable mastery", () => {
@@ -149,12 +159,13 @@ test("Concept names normalize whitespace and casing for durable mastery keys", a
   assert.equal(normalizeConceptName("  Closures   and   Scope  "), "closures and scope");
   const mastery = new UserMastery({
     userId: new Types.ObjectId().toString(),
-    conceptName: "  Closures  ",
+    conceptName: "  Closures   and   Scope  ",
+    canonicalConceptName: "  Explicit   Canonical   Name ",
     masteryScore: 0.9,
   });
   await mastery.validate();
-  assert.equal(mastery.conceptKey, "closures");
-  assert.equal(mastery.canonicalConceptName, "closures");
+  assert.equal(mastery.conceptKey, "closures and scope");
+  assert.equal(mastery.canonicalConceptName, "explicit canonical name");
 });
 
 test(
@@ -191,7 +202,7 @@ test(
     });
     await UserMastery.create({
       userId,
-      conceptName: "JavaScript Arrays",
+        conceptName: "  JavaScript Arrays  ",
       masteryScore: 0.90,
     });
 
@@ -215,6 +226,11 @@ test(
       },
     ]);
     const originalFetch = globalThis.fetch;
+    await UserMastery.create({
+      userId,
+      conceptName: "  CLOSURES  ",
+      masteryScore: 0.99,
+    });
     globalThis.fetch = async () => new Response(JSON.stringify({
       candidates: [{
         content: { parts: [{ text: JSON.stringify({ mastered: true, feedback: "Correct", hint: null }) }] },
@@ -345,6 +361,7 @@ test(
     assert.equal(closureMastery.length, 1);
     assert.equal(closureMastery[0].conceptKey, "closures");
     assert.equal(closureMastery[0].canonicalConceptName, "closures");
+    assert.equal(closureMastery[0].masteryScore, 0.99);
 
     await assert.rejects(
       getOuterFringe(planId, otherUserId),

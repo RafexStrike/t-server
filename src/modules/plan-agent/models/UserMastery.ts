@@ -1,5 +1,4 @@
 import mongoose, { Document, Model, Schema } from "mongoose";
-import { normalizeConceptName } from "../../common/utils/normalize-concept-name.js";
 
 /**
  * Long-lived evidence of a user's mastery, independent of any one generated
@@ -59,8 +58,11 @@ const UserMasterySchema = new Schema<UserMasteryDocument, UserMasteryModel>(
 
 UserMasterySchema.pre("validate", function () {
   if (this.conceptName) {
-    this.conceptKey = this.conceptName.trim().toLowerCase();
-    this.canonicalConceptName = normalizeConceptName(this.conceptName);
+    const normalizedConcept = this.conceptName.trim().replace(/\s+/g, " ");
+    this.canonicalConceptName = this.canonicalConceptName
+      ? this.canonicalConceptName.trim().replace(/\s+/g, " ")
+      : normalizedConcept;
+    this.conceptKey = normalizedConcept.toLowerCase();
   }
 });
 
