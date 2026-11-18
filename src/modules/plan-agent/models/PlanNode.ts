@@ -9,6 +9,15 @@ export const PLAN_NODE_STATUSES = [
 
 export type PlanNodeStatus = (typeof PLAN_NODE_STATUSES)[number];
 
+export interface NodeAttempt {
+  attemptNumber: number;
+  learnerAnswer: string;
+  wmlScore: number;
+  tutorFeedback: string;
+  passed: boolean;
+  createdAt: Date;
+}
+
 /**
  * One concept in a plan's prerequisite DAG. Each node stores references to
  * its immediate prerequisite nodes; this is the parent-reference edge model
@@ -22,6 +31,7 @@ export interface PlanNodeDocument extends Document {
   prerequisites: Types.ObjectId[];
   attemptCount: number;
   wmlSamples: number[];
+  attempts: NodeAttempt[];
   lastAttempt?: string;
   lastTutorFeedback?: string;
   createdAt: Date;
@@ -78,6 +88,20 @@ const PlanNodeSchema = new Schema<PlanNodeDocument, PlanNodeModel>(
     },
     attemptCount: { type: Number, default: 0, min: 0 },
     wmlSamples: { type: [Number], default: [] },
+    attempts: {
+      type: [
+        {
+          _id: false,
+          attemptNumber: { type: Number, required: true, min: 1 },
+          learnerAnswer: { type: String, required: true },
+          wmlScore: { type: Number, required: true, min: 0, max: 1 },
+          tutorFeedback: { type: String, required: true },
+          passed: { type: Boolean, required: true },
+          createdAt: { type: Date, required: true },
+        },
+      ],
+      default: [],
+    },
     lastAttempt: { type: String },
     lastTutorFeedback: { type: String },
   },

@@ -1,5 +1,5 @@
-import "dotenv/config";
 import mongoose from "mongoose";
+import { env } from "./env.js";
 
 /**
  * Opens the shared Mongoose connection used by the backend. Keeping connection
@@ -7,7 +7,7 @@ import mongoose from "mongoose";
  * schema definitions or LLM/agent logic.
  */
 export async function connectToDatabase(
-  uri: string | undefined = process.env.MONGODB_URI,
+  uri: string | undefined = env.MONGODB_URI,
 ): Promise<typeof mongoose> {
   if (!uri?.trim()) {
     const message =

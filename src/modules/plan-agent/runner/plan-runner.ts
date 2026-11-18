@@ -5,6 +5,7 @@ import { chmod, readFile, unlink, writeFile } from "node:fs/promises";
 import { createInterface } from "node:readline/promises";
 import { stdin, stdout } from "node:process";
 import { Types } from "mongoose";
+import { env } from "../../../config/env.js";
 import { connectToDatabase, disconnectFromDatabase } from "../../../config/db.js";
 import { User } from "../../auth/models/User.js";
 import {
@@ -154,7 +155,7 @@ async function createPlanForUser(userId: string): Promise<string> {
     const message = await terminal.question(
       evaluation?.nextQuestion ? `Clarification: ${evaluation.nextQuestion}\nYou: ` : "Learning goal: ",
     );
-    evaluation = await evaluateUserIntent(userId, message, process.env.GEMINI_API_KEY ?? "");
+    evaluation = await evaluateUserIntent(userId, message, env.GEMINI_API_KEY ?? "");
     if (!evaluation.isComplete && evaluation.nextQuestion) {
       console.log(`[Runner] ${evaluation.nextQuestion}`);
     }
@@ -169,7 +170,7 @@ async function createPlanForUser(userId: string): Promise<string> {
     userId,
     topic,
     slots.targetDepth,
-    process.env.GEMINI_API_KEY ?? "",
+    env.GEMINI_API_KEY ?? "",
   );
   await printSavedPlan(plan._id.toString(), userId);
   await clearUserLearningSlots(userId);
@@ -179,7 +180,7 @@ async function createPlanForUser(userId: string): Promise<string> {
 async function runDiagnostics(planId: string, userId: string): Promise<void> {
   const plan = await Plan.findOne({ _id: planId, userId });
   if (!plan) throw new Error(`Plan ${planId} could not be loaded for its owner.`);
-  const apiKey = process.env.GEMINI_API_KEY ?? "";
+  const apiKey = env.GEMINI_API_KEY ?? "";
   const totalNodes = await PlanNode.countDocuments({ planId });
   const maxQuestions = Math.max(5, Math.min(10, Math.ceil(totalNodes * 0.4)));
   let questionsAsked = 0;
@@ -239,10 +240,12 @@ async function runDiagnostics(planId: string, userId: string): Promise<void> {
 }
 
 async function runLearningSession(planId: string, userId: string): Promise<void> {
-  const apiKey = process.env.GEMINI_API_KEY ?? "";
+  const apiKey = env.GEMINI_API_KEY ?? "";
   const plan = await Plan.findOne({ _id: planId, userId });
   if (!plan) throw new Error(`Plan ${planId} could not be loaded for its owner.`);
-  let capacityThreshold = plan.capacityThreshold ?? DEFAULT_WML_CAPACITY;
+  const learner = await User.findOne({ _id: userId }).select("wmlCapacityThreshold");
+  if (!learner) throw new Error("Authenticated user could not be loaded for the learning session.");
+  let capacityThreshold = learner.wmlCapacityThreshold ?? plan.capacityThreshold ?? DEFAULT_WML_CAPACITY;
 
   console.log("=== Phase 2: Micro-Tutor Learning Session ===");
   while (true) {

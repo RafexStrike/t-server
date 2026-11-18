@@ -5,6 +5,7 @@ import {
   timingSafeEqual,
 } from "node:crypto";
 import { promisify } from "node:util";
+import { env } from "../../../config/env.js";
 import { User } from "../models/User.js";
 
 const scrypt = promisify(scryptCallback);
@@ -24,8 +25,8 @@ export interface PublicUser {
 }
 
 function getTokenConfig(): { secret: string; issuer: string } {
-  const secret = process.env.BETTER_AUTH_SECRET;
-  const issuer = process.env.BETTER_AUTH_URL;
+  const secret = env.BETTER_AUTH_SECRET;
+  const issuer = env.BETTER_AUTH_URL;
   if (!secret || secret.length < 32) {
     throw new Error("BETTER_AUTH_SECRET must be configured with at least 32 characters.");
   }

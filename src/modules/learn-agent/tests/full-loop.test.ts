@@ -271,9 +271,20 @@ test(
       assert.equal(failedNode?.lastAttempt, "It copies the value.");
       assert.ok(failedNode?.lastTutorFeedback?.includes("Distinguish retained scope"));
       assert.ok(failedNode?.lastTutorFeedback?.includes("Track the outer binding."));
+      assert.deepEqual(failedNode?.attempts.map((attempt) => ({
+        attemptNumber: attempt.attemptNumber,
+        learnerAnswer: attempt.learnerAnswer,
+        wmlScore: attempt.wmlScore,
+        passed: attempt.passed,
+      })), [{
+        attemptNumber: 1,
+        learnerAnswer: "It copies the value.",
+        wmlScore: 0.5,
+        passed: false,
+      }]);
       const resumed = await loadLearningNodeState(plan._id.toString(), userId!, nodeId);
       assert.equal(resumed.capacityThreshold, 0.74);
-      assert.equal((await User.findById(userId))?.capacityThreshold, 0.74);
+      assert.equal((await User.findById(userId))?.wmlCapacityThreshold, 0.74);
       assert.equal(resumed.attemptCount, 1);
       assert.deepEqual(resumed.wmlSamples, [0.5]);
       assert.equal(resumed.previousAttempt, "It copies the value.");
@@ -290,12 +301,11 @@ test(
         userId: userId!,
         nodeId,
         apiKey,
-        previousAttempt: "It copies the value.",
-        tutorFeedback: failed.feedback,
       });
       const remediationPrompt = harness.requests[requestStart].prompt;
       assert.ok(remediationPrompt.includes("It copies the value."));
       assert.ok(remediationPrompt.includes("Distinguish retained scope from copied values."));
+      assert.ok(remediationPrompt.includes("Track the outer binding."));
     });
 
     await t.test("mastery scores upsert by attempt and preserve a higher cross-plan score", async () => {
@@ -321,7 +331,9 @@ test(
         assert.equal(evaluation.masteryScore, expectedScore);
         assert.ok(evaluation.updatedCapacityThreshold >= 0.45);
         assert.ok(evaluation.updatedCapacityThreshold <= 0.90);
-        assert.equal((await PlanNode.findById(nodes[index]._id))?.status, "MASTERED");
+        const masteredNode = await PlanNode.findById(nodes[index]._id);
+        assert.equal(masteredNode?.status, "MASTERED");
+        assert.equal(masteredNode?.attempts.at(-1)?.passed, true);
         assert.equal((await UserMastery.findOne({
           userId,
           conceptKey: masteryDefinitions[index].conceptName.trim().toLowerCase(),

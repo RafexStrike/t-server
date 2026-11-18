@@ -43,12 +43,15 @@ export async function loadLearningNodeState(
   if (!plan || !learner || !node) {
     throw new Error("Learning state could not be loaded for the authenticated plan owner.");
   }
+  const latestFailedAttempt = [...(node.attempts ?? [])].reverse().find((attempt) => !attempt.passed);
+  const previousAttempt = latestFailedAttempt?.learnerAnswer ?? node.lastAttempt;
+  const tutorFeedback = latestFailedAttempt?.tutorFeedback ?? node.lastTutorFeedback;
   return {
-    capacityThreshold: learner.capacityThreshold ?? plan.capacityThreshold ?? DEFAULT_WML_CAPACITY,
+    capacityThreshold: learner.wmlCapacityThreshold ?? plan.capacityThreshold ?? DEFAULT_WML_CAPACITY,
     attemptCount: node.attemptCount ?? 0,
     wmlSamples: [...(node.wmlSamples ?? [])],
-    ...(node.lastAttempt !== undefined ? { previousAttempt: node.lastAttempt } : {}),
-    ...(node.lastTutorFeedback !== undefined ? { tutorFeedback: node.lastTutorFeedback } : {}),
+    ...(previousAttempt !== undefined ? { previousAttempt } : {}),
+    ...(tutorFeedback !== undefined ? { tutorFeedback } : {}),
   };
 }
 
@@ -171,6 +174,10 @@ export async function prepareNodeLesson(params: {
     await node.save();
   }
 
+  const latestFailedAttempt = [...(node.attempts ?? [])].reverse().find((attempt) => !attempt.passed);
+  const previousAttempt = params.previousAttempt ?? latestFailedAttempt?.learnerAnswer;
+  const tutorFeedback = params.tutorFeedback ?? latestFailedAttempt?.tutorFeedback;
+
   const planNodes = await PlanNode.find({ planId: params.planId });
   const graphNodes = planNodes.map((candidate) => ({
     nodeId: candidate._id.toString(),
@@ -201,7 +208,7 @@ export async function prepareNodeLesson(params: {
     `[Learn Agent][System 1 Pre-Gate] Node="${node.conceptName}" bloom=${node.bloomLevel} IL=${preGate.intrinsicLoad.toFixed(2)} budget=${preGate.extrinsicBudget.toFixed(2)} mode=${preGate.mode}`,
   );
 
-  const remediation = params.previousAttempt !== undefined && params.tutorFeedback !== undefined;
+  const remediation = previousAttempt !== undefined && tutorFeedback !== undefined;
   const initialDirectives = remediation
     ? [
         "Use high scaffolding: isolate the learner's misconception, explain one small step, and provide a concrete example.",
@@ -216,8 +223,8 @@ export async function prepareNodeLesson(params: {
     preGateResult: preGate,
     ...(remediation
       ? {
-          previousAttempt: params.previousAttempt,
-          tutorFeedback: params.tutorFeedback,
+          previousAttempt,
+          tutorFeedback,
         }
       : {}),
   };
@@ -311,13 +318,13 @@ export async function submitNodeAttempt(params: {
   });
   const hint = typeof result.hint === "string" ? result.hint.trim() : "";
   const tutorFeedback = [result.feedback.trim(), hint].filter(Boolean).join(" ");
-  await Plan.findByIdAndUpdate(params.planId, {
+  await Plan.updateOne({ _id: params.planId, userId: params.userId }, {
     $set: { capacityThreshold: calculation.updatedCapacityThreshold },
   });
   await Promise.all([
     User.updateOne(
       { _id: params.userId },
-      { $set: { capacityThreshold: calculation.updatedCapacityThreshold } },
+      { $set: { wmlCapacityThreshold: calculation.updatedCapacityThreshold } },
     ),
     PlanNode.updateOne(
       { _id: node._id, planId: params.planId },
@@ -328,6 +335,16 @@ export async function submitNodeAttempt(params: {
           lastAttempt: params.userAnswer,
           lastTutorFeedback: tutorFeedback,
           status: result.mastered ? "MASTERED" : "IN_PROGRESS",
+        },
+        $push: {
+          attempts: {
+            attemptNumber: params.attemptCount,
+            learnerAnswer: params.userAnswer,
+            wmlScore: params.averageWml,
+            tutorFeedback,
+            passed: result.mastered,
+            createdAt: new Date(),
+          },
         },
       },
     ),
