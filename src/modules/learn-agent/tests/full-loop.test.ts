@@ -9,6 +9,7 @@ import { Plan } from "../../plan-agent/models/Plan.js";
 import { PlanNode } from "../../plan-agent/models/PlanNode.js";
 import { UserLearningSlots } from "../../plan-agent/models/UserLearningSlots.js";
 import { UserMastery } from "../../plan-agent/models/UserMastery.js";
+import { normalizeConceptName } from "../../common/utils/normalize-concept-name.js";
 import { AttemptLog } from "../models/AttemptLog.js";
 import { evaluateUserIntent } from "../../plan-agent/services/clarify-service.js";
 import { getNextDiagnosticNode } from "../../plan-agent/services/diagnostic-engine.js";
@@ -21,68 +22,7 @@ import { createLearningPlan } from "../../plan-agent/services/plan-service.js";
 import { getOuterFringe } from "../services/outer-fringe.js";
 import { loadLearningNodeState, prepareNodeLesson, submitNodeAttempt } from "../services/micro-tutor.js";
 import type { WmlAssessment } from "../types/wml.js";
-
-interface GeminiRequestBody {
-  systemInstruction?: { parts?: Array<{ text?: string }> };
-  contents?: Array<{ parts?: Array<{ text?: string }> }>;
-  [key: string]: unknown;
-}
-
-interface CapturedGeminiRequest {
-  url: string;
-  body: GeminiRequestBody;
-  prompt: string;
-}
-
-function createFetchHarness() {
-  const replies: Array<(request: CapturedGeminiRequest) => unknown> = [];
-  const requests: CapturedGeminiRequest[] = [];
-  const unexpectedRequests: CapturedGeminiRequest[] = [];
-
-  const fetchMock: typeof fetch = async (input, init) => {
-    const body = JSON.parse(String(init?.body ?? "{}")) as GeminiRequestBody;
-    const prompt = [
-      ...(body.systemInstruction?.parts ?? []).map((part) => part.text ?? ""),
-      ...(body.contents ?? []).flatMap((content) =>
-        (content.parts ?? []).map((part) => part.text ?? ""),
-      ),
-    ].join("\n");
-    const request = { url: String(input), body, prompt };
-    requests.push(request);
-
-    const reply = replies.shift();
-    if (!reply) {
-      unexpectedRequests.push(request);
-      return new Response(JSON.stringify({ error: { message: "Unexpected mock fetch" } }), {
-        status: 400,
-        headers: { "Content-Type": "application/json" },
-      });
-    }
-
-    const payload = reply(request);
-    return new Response(JSON.stringify({
-      candidates: [{ content: { parts: [{ text: JSON.stringify(payload) }] } }],
-    }), {
-      status: 200,
-      headers: { "Content-Type": "application/json" },
-    });
-  };
-
-  return {
-    fetchMock,
-    requests,
-    enqueue(reply: unknown) {
-      replies.push(() => reply);
-    },
-    route(handler: (request: CapturedGeminiRequest) => unknown) {
-      replies.push(handler);
-    },
-    assertDrained() {
-      assert.equal(replies.length, 0, "all queued Gemini replies should be consumed");
-      assert.deepEqual(unexpectedRequests, [], "no unplanned fetch should be made");
-    },
-  };
-}
+import { createFetchStub } from "./fetch-stub.js";
 
 interface NodeDefinition {
   conceptName: string;
@@ -138,16 +78,44 @@ const denseLesson = {
   expectedCriteria: "The closure retains access to the lexical environment.",
 };
 
+test("Fetch stub captures Gemini calls and rejects unqueued requests", async (t) => {
+  const stub = createFetchStub(t);
+  stub.enqueue({ explanation: "A lesson", checkQuestion: "A question", expectedCriteria: "A criterion" });
+
+  const response = await fetch("https://example.test/generate?key=test", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ contents: [{ parts: [{ text: "Teach this concept" }] }] }),
+  });
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get("content-type"), "application/json");
+  assert.equal(stub.calls.length, 1);
+  assert.equal(stub.calls[0].method, "POST");
+  assert.equal(stub.calls[0].headers.get("content-type"), "application/json");
+  assert.equal(stub.calls[0].prompt, "Teach this concept");
+  assert.deepEqual(await response.json(), {
+    candidates: [{
+      content: { parts: [{ text: JSON.stringify({
+        explanation: "A lesson",
+        checkQuestion: "A question",
+        expectedCriteria: "A criterion",
+      }) }] },
+    }],
+  });
+  await assert.rejects(
+    fetch("https://example.test/unexpected"),
+    /Unexpected unstubbed fetch call/,
+  );
+});
+
 test(
   "Deterministic mocked tests cover the full Plan Agent and Learn Agent loop",
   { skip: !process.env.MONGODB_URI?.trim() },
   async (t) => {
     await connectToDatabase();
-    const originalFetch = globalThis.fetch;
     const email = `full-loop-${Date.now()}-${Math.random().toString(36).slice(2)}@example.test`;
     let userId: string | undefined;
     t.after(async () => {
-      globalThis.fetch = originalFetch;
       const user = userId
         ? await User.findById(userId).select("_id")
         : await User.findOne({ email }).select("_id");
@@ -166,11 +134,7 @@ test(
 
     const registration = await registerUser(email, "full-loop-test-password", "Full Loop Test");
     userId = registration.user.userId;
-    const harness = createFetchHarness();
-    globalThis.fetch = harness.fetchMock;
-    t.after(() => {
-      globalThis.fetch = originalFetch;
-    });
+    const harness = createFetchStub(t);
     const apiKey = "deterministic-test-key";
 
     await t.test("prepareNodeLesson enters progress and only regenerates overload once", async () => {
@@ -178,7 +142,7 @@ test(
         { conceptName: "Basic Recall", bloomLevel: 1 },
       ]);
       await Plan.updateOne({ _id: plan._id }, { $set: { capacityThreshold: 0.62 } });
-      const requestStart = harness.requests.length;
+      const requestStart = harness.calls.length;
       harness.enqueue(simpleLesson);
       const turn = await prepareNodeLesson({
         planId: plan._id.toString(),
@@ -190,8 +154,12 @@ test(
       assert.equal(turn.wasRegeneratedForOverload, false);
       assert.equal(turn.preGate.extrinsicBudget, 0.62);
       assert.equal(turn.wmlAssessment.capacityThreshold, 0.62);
-      assert.equal(harness.requests.length - requestStart, 1);
-      assert.ok(harness.requests[requestStart].prompt.includes("Basic Recall"));
+      assert.equal(harness.calls.length - requestStart, 1);
+      assert.match(harness.calls[requestStart].url, /generativelanguage\.googleapis\.com/);
+      assert.equal(harness.calls[requestStart].method, "POST");
+      assert.equal(harness.calls[requestStart].headers.get("content-type"), "application/json");
+      assert.equal(harness.calls[requestStart].body.generationConfig?.responseMimeType, "application/json");
+      assert.ok(harness.calls[requestStart].prompt.includes("Basic Recall"));
       const lowLoadDirective = turn.wmlAssessment.scaffoldingDirectives.find((directive) =>
         directive.includes("Learner cognitive load is low"),
       );
@@ -205,7 +173,7 @@ test(
         capacityThreshold: 0.90,
         scaffoldingDirectives: [lowLoadDirective],
       });
-      assert.ok(harness.requests[harness.requests.length - 1].prompt.includes(lowLoadDirective));
+      assert.ok(harness.calls[harness.calls.length - 1].prompt.includes(lowLoadDirective));
 
       const prerequisiteDefinitions = Array.from({ length: 4 }, (_, index) => ({
         conceptName: `Known prerequisite ${index + 1}`,
@@ -225,7 +193,7 @@ test(
         ],
       );
       const overloadNode = overloadNodes[overloadNodes.length - 1];
-      const upfrontStart = harness.requests.length;
+      const upfrontStart = harness.calls.length;
       harness.enqueue(simpleLesson);
       const proactiveTurn = await prepareNodeLesson({
         planId: overloadPlan._id.toString(),
@@ -235,13 +203,13 @@ test(
         capacityThreshold: 0.90,
       });
       assert.equal(proactiveTurn.wmlAssessment.isOverloaded, false);
-      assert.equal(harness.requests.length - upfrontStart, 1);
+      assert.equal(harness.calls.length - upfrontStart, 1);
       assert.ok(
-        harness.requests[upfrontStart].prompt.includes(
+        harness.calls[upfrontStart].prompt.includes(
           "Decompose the concept into one atomic sub-step",
         ),
       );
-      const overloadStart = harness.requests.length;
+      const overloadStart = harness.calls.length;
       harness.enqueue(denseLesson);
       harness.enqueue(denseLesson);
       const overloadedTurn = await prepareNodeLesson({
@@ -253,8 +221,11 @@ test(
       });
       assert.equal(overloadedTurn.wasRegeneratedForOverload, true);
       assert.equal(overloadedTurn.wmlAssessment.isOverloaded, true);
-      assert.equal(harness.requests.length - overloadStart, 2);
-      assert.ok(harness.requests[overloadStart + 1].prompt.includes("End with a single"));
+      assert.equal(harness.calls.length - overloadStart, 2, "System 1 permits only one regeneration retry");
+      assert.equal(overloadedTurn.lesson.explanation, denseLesson.explanation);
+      assert.ok(harness.calls[overloadStart + 1].prompt.includes("End with a single"));
+      assert.ok(harness.calls[overloadStart + 1].prompt.includes("Decompose the concept into one atomic sub-step"));
+      assert.ok(!harness.calls[overloadStart].prompt.includes("End with a single"));
       harness.assertDrained();
     });
 
@@ -262,7 +233,7 @@ test(
       const { plan, nodes } = await createPlanFixture(userId!, "Ownership", [
         { conceptName: "Owned Node", bloomLevel: 1 },
       ]);
-      const requestStart = harness.requests.length;
+      const requestStart = harness.calls.length;
       const validPlanId = plan._id.toString();
       const validNodeId = nodes[0]._id.toString();
 
@@ -287,7 +258,7 @@ test(
         }),
         /Plan not found for the authenticated user/,
       );
-      assert.equal(harness.requests.length, requestStart);
+      assert.equal(harness.calls.length, requestStart);
     });
 
     await t.test("failed attempts retain progress and remediation includes prior answer and feedback", async () => {
@@ -310,6 +281,8 @@ test(
         apiKey,
       });
       assert.equal(failed.mastered, false);
+      assert.equal(failed.feedback, "Distinguish retained scope from copied values.");
+      assert.equal(failed.masteryScore, 0.25);
       const failedNode = await PlanNode.findById(nodeId);
       assert.equal(failedNode?.status, "IN_PROGRESS");
       assert.equal(failedNode?.attemptCount, 1);
@@ -335,6 +308,7 @@ test(
       assert.equal(persistedAttempt.wmlScore.extrinsic.score, testWmlAssessment.extrinsic.score);
       assert.equal(persistedAttempt.wmlScore.totalWml, testWmlAssessment.totalWml);
       assert.equal(persistedAttempt.wmlScore.capacityThreshold, testWmlAssessment.capacityThreshold);
+      assert.equal(persistedAttempt.wmlScore.isOverloaded, testWmlAssessment.isOverloaded);
       assert.equal(persistedAttempt.isCorrect, false);
       assert.equal(
         persistedAttempt.tutorFeedback,
@@ -352,7 +326,7 @@ test(
         conceptKey: "lexical scope",
       }), 0);
 
-      const requestStart = harness.requests.length;
+      const requestStart = harness.calls.length;
       harness.enqueue(simpleLesson);
       await prepareNodeLesson({
         planId: plan._id.toString(),
@@ -360,7 +334,7 @@ test(
         nodeId,
         apiKey,
       });
-      const remediationPrompt = harness.requests[requestStart].prompt;
+      const remediationPrompt = harness.calls[requestStart].prompt;
       assert.ok(remediationPrompt.includes("It copies the value."));
       assert.ok(remediationPrompt.includes("Distinguish retained scope from copied values."));
       assert.ok(remediationPrompt.includes("Track the outer binding."));
@@ -411,10 +385,11 @@ test(
     });
 
     await t.test("mastery scores upsert by attempt and preserve a higher cross-plan score", async () => {
-      const masteryDefinitions = [1, 2, 3].map((attemptCount) => ({
-        conceptName: `Attempt ${attemptCount} Mastery`,
-        bloomLevel: 2,
-      }));
+      const masteryDefinitions = [
+        { conceptName: "  Shared   Mastery Concept  ", bloomLevel: 2 },
+        { conceptName: "Attempt 2 Mastery", bloomLevel: 2 },
+        { conceptName: "Attempt 3 Mastery", bloomLevel: 2 },
+      ];
       const { plan, nodes } = await createPlanFixture(userId!, "Durable mastery", masteryDefinitions);
       for (const [index, attemptCount] of [1, 2, 3].entries()) {
         harness.enqueue({ mastered: true, feedback: "Correct.", hint: null });
@@ -437,14 +412,15 @@ test(
         const masteredNode = await PlanNode.findById(nodes[index]._id);
         assert.equal(masteredNode?.status, "MASTERED");
         assert.equal(masteredNode?.attempts.at(-1)?.passed, true);
+        assert.equal((await Plan.findById(plan._id))?.capacityThreshold, evaluation.updatedCapacityThreshold);
         assert.equal((await UserMastery.findOne({
           userId,
-          conceptKey: masteryDefinitions[index].conceptName.trim().toLowerCase(),
+          conceptKey: normalizeConceptName(masteryDefinitions[index].conceptName),
         }))?.masteryScore, expectedScore);
       }
 
       const laterPlan = await createPlanFixture(userId!, "Later mastery", [
-        { conceptName: "Attempt 1 Mastery", bloomLevel: 2 },
+        { conceptName: "shared mastery concept", bloomLevel: 2 },
       ]);
       harness.enqueue({ mastered: true, feedback: "Correct again.", hint: null });
       const laterEvaluation = await submitNodeAttempt({
@@ -462,7 +438,7 @@ test(
       assert.equal(laterEvaluation.masteryScore, 0.86);
       assert.equal((await UserMastery.findOne({
         userId,
-        conceptKey: "attempt 1 mastery",
+        conceptKey: "shared mastery concept",
       }))?.masteryScore, 0.95);
     });
 
@@ -592,7 +568,7 @@ test(
           });
           assert.equal(failedAttempt.mastered, false);
 
-          const remediationStart = harness.requests.length;
+          const remediationStart = harness.calls.length;
           harness.enqueue(simpleLesson);
           const remediationTurn = await prepareNodeLesson({
             planId,
@@ -603,8 +579,8 @@ test(
             previousAttempt: "The closure copies the value.",
             tutorFeedback: failedAttempt.feedback,
           });
-          assert.ok(harness.requests[remediationStart].prompt.includes("The closure copies the value."));
-          assert.ok(harness.requests[remediationStart].prompt.includes(failedAttempt.feedback));
+          assert.ok(harness.calls[remediationStart].prompt.includes("The closure copies the value."));
+          assert.ok(harness.calls[remediationStart].prompt.includes(failedAttempt.feedback));
           harness.enqueue({ mastered: true, feedback: "Correctly described retained scope.", hint: null });
           const mastered = await submitNodeAttempt({
             planId,
@@ -622,7 +598,7 @@ test(
           assert.ok(mastered.updatedCapacityThreshold >= 0.45 && mastered.updatedCapacityThreshold <= 0.90);
         } else {
           assert.equal(node.conceptName, "Closure Applications");
-          const overloadStart = harness.requests.length;
+          const overloadStart = harness.calls.length;
           harness.enqueue(denseLesson);
           harness.enqueue(denseLesson);
           const overloaded = await prepareNodeLesson({
@@ -634,8 +610,8 @@ test(
           });
           assert.equal(overloaded.wasRegeneratedForOverload, true);
           assert.equal(overloaded.wmlAssessment.isOverloaded, true);
-          assert.equal(harness.requests.length - overloadStart, 2);
-          assert.ok(harness.requests[overloadStart + 1].prompt.includes("End with a single"));
+          assert.equal(harness.calls.length - overloadStart, 2);
+          assert.ok(harness.calls[overloadStart + 1].prompt.includes("End with a single"));
 
           harness.enqueue({ mastered: true, feedback: "Correctly applied the closure model.", hint: null });
           const mastered = await submitNodeAttempt({
@@ -662,11 +638,11 @@ test(
         { conceptName: "javascript closures", bloomLevel: 3, prerequisiteNames: [] },
       ]);
       const secondPlan = await createLearningPlan(userId!, "Closures review", 3, apiKey);
-      const fetchCountBeforeCredit = harness.requests.length;
+      const fetchCountBeforeCredit = harness.calls.length;
       const creditedFringe = await getOuterFringe(secondPlan._id.toString(), userId!);
       assert.equal(creditedFringe.isPlanCompleted, true);
       assert.equal(creditedFringe.remainingCount, 0);
-      assert.equal(harness.requests.length, fetchCountBeforeCredit);
+      assert.equal(harness.calls.length, fetchCountBeforeCredit);
       assert.equal((await PlanNode.findOne({ planId: secondPlan._id }))?.status, "MASTERED");
       harness.assertDrained();
     });
