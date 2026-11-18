@@ -298,6 +298,11 @@ async function runLearningSession(planId: string, userId: string): Promise<void>
     let tutorFeedback = savedState.tutorFeedback;
     let scaffoldingDirectives: string[] = [];
     const wmlSamples = savedState.wmlSamples;
+    if (savedState.attemptCount > 0) {
+      console.log(
+        `[Runner] Resuming ${selected.conceptName} after ${savedState.attemptCount} recorded attempt(s).${tutorFeedback ? ` Latest feedback: ${tutorFeedback}` : ""}`,
+      );
+    }
     let shouldExit = false;
 
     while (true) {
@@ -347,6 +352,7 @@ async function runLearningSession(planId: string, userId: string): Promise<void>
         userId,
         nodeId: selected.nodeId,
         lesson: turn.lesson,
+        wmlAssessment: turn.wmlAssessment,
         userAnswer,
         attemptCount,
         averageWml,

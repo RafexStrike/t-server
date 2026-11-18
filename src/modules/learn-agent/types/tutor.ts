@@ -8,6 +8,13 @@ export interface TutorTurnPromptInput {
   preGateResult: IntrinsicPreGateResult;
   previousAttempt?: string;
   tutorFeedback?: string;
+  priorMistakeHistory?: Array<{
+    attemptNumber: number;
+    userAnswer: string;
+    isOverloaded: boolean;
+    loadLevel: string;
+    tutorFeedback: string;
+  }>;
 }
 
 export interface MicroLessonPayload {

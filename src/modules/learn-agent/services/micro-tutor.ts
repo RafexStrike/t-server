@@ -2,6 +2,7 @@ import { Types } from "mongoose";
 import { fetchWithRetry } from "../../common/utils/retry.js";
 import { normalizeConceptName } from "../../common/utils/normalize-concept-name.js";
 import { User } from "../../auth/models/User.js";
+import { AttemptLog } from "../models/AttemptLog.js";
 import { Plan } from "../../plan-agent/models/Plan.js";
 import { PlanNode } from "../../plan-agent/models/PlanNode.js";
 import { UserMastery } from "../../plan-agent/models/UserMastery.js";
@@ -43,16 +44,54 @@ export async function loadLearningNodeState(
   if (!plan || !learner || !node) {
     throw new Error("Learning state could not be loaded for the authenticated plan owner.");
   }
-  const latestFailedAttempt = [...(node.attempts ?? [])].reverse().find((attempt) => !attempt.passed);
-  const previousAttempt = latestFailedAttempt?.learnerAnswer ?? node.lastAttempt;
-  const tutorFeedback = latestFailedAttempt?.tutorFeedback ?? node.lastTutorFeedback;
+  const [attemptHistory, latestLoggedAttempt] = await Promise.all([
+    getNodeAttemptHistory({
+      userId,
+      planId,
+      nodeId,
+      conceptKey: normalizeConceptName(node.conceptName),
+    }),
+    AttemptLog.findOne({ userId, planId, nodeId }).sort({ attemptNumber: -1 }).select("attemptNumber"),
+  ]);
+  const latestFailedAttempt = attemptHistory.find((attempt) => !attempt.isCorrect);
+  const legacyFailedAttempt = [...(node.attempts ?? [])].reverse().find((attempt) => !attempt.passed);
+  const previousAttempt = latestFailedAttempt?.userAnswer ?? legacyFailedAttempt?.learnerAnswer ?? node.lastAttempt;
+  const tutorFeedback = latestFailedAttempt?.tutorFeedback ?? legacyFailedAttempt?.tutorFeedback ?? node.lastTutorFeedback;
   return {
     capacityThreshold: learner.capacityThreshold ?? plan.capacityThreshold ?? DEFAULT_WML_CAPACITY,
-    attemptCount: node.attemptCount ?? 0,
+    attemptCount: Math.max(node.attemptCount ?? 0, latestLoggedAttempt?.attemptNumber ?? 0),
     wmlSamples: [...(node.wmlSamples ?? [])],
     ...(previousAttempt !== undefined ? { previousAttempt } : {}),
     ...(tutorFeedback !== undefined ? { tutorFeedback } : {}),
   };
+}
+
+export async function getNodeAttemptHistory(params: {
+  userId: string;
+  planId: string;
+  nodeId: string;
+  conceptKey: string;
+}) {
+  const [nodeAttempts, priorConceptMistakes] = await Promise.all([
+    AttemptLog.find({
+      userId: params.userId,
+      planId: params.planId,
+      nodeId: params.nodeId,
+    }).sort({ createdAt: -1 }).limit(5),
+    AttemptLog.find({
+      userId: params.userId,
+      conceptKey: normalizeConceptName(params.conceptKey),
+      planId: { $ne: params.planId },
+      isCorrect: false,
+    }).sort({ createdAt: -1 }).limit(5),
+  ]);
+  const attempts = new Map<string, (typeof nodeAttempts)[number]>();
+  for (const attempt of [...nodeAttempts, ...priorConceptMistakes]) {
+    attempts.set(attempt._id.toString(), attempt);
+  }
+  return [...attempts.values()].sort(
+    (left, right) => right.createdAt.getTime() - left.createdAt.getTime(),
+  );
 }
 
 interface GeminiResponse {
@@ -177,9 +216,17 @@ export async function prepareNodeLesson(params: {
     await node.save();
   }
 
-  const latestFailedAttempt = [...(node.attempts ?? [])].reverse().find((attempt) => !attempt.passed);
-  const previousAttempt = params.previousAttempt ?? latestFailedAttempt?.learnerAnswer;
-  const tutorFeedback = params.tutorFeedback ?? latestFailedAttempt?.tutorFeedback;
+  const attemptHistory = await getNodeAttemptHistory({
+    userId: params.userId,
+    planId: params.planId,
+    nodeId: params.nodeId,
+    conceptKey: normalizeConceptName(node.conceptName),
+  });
+  const priorMistakes = attemptHistory.filter((attempt) => !attempt.isCorrect).slice(0, 5);
+  const latestFailedAttempt = priorMistakes[0];
+  const latestLegacyFailure = [...(node.attempts ?? [])].reverse().find((attempt) => !attempt.passed);
+  const previousAttempt = params.previousAttempt ?? latestFailedAttempt?.userAnswer ?? latestLegacyFailure?.learnerAnswer;
+  const tutorFeedback = params.tutorFeedback ?? latestFailedAttempt?.tutorFeedback ?? latestLegacyFailure?.tutorFeedback;
 
   const planNodes = await PlanNode.find({ planId: params.planId });
   const graphNodes = planNodes.map((candidate) => ({
@@ -234,6 +281,13 @@ export async function prepareNodeLesson(params: {
       ? {
           previousAttempt,
           tutorFeedback,
+          priorMistakeHistory: priorMistakes.map((attempt) => ({
+            attemptNumber: attempt.attemptNumber,
+            userAnswer: attempt.userAnswer,
+            isOverloaded: attempt.wmlScore.isOverloaded,
+            loadLevel: attempt.wmlScore.loadLevel,
+            tutorFeedback: attempt.tutorFeedback,
+          })),
         }
       : {}),
   };
@@ -291,6 +345,7 @@ export async function submitNodeAttempt(params: {
   userId: string;
   nodeId: string;
   lesson: MicroLessonPayload;
+  wmlAssessment: WmlAssessment;
   userAnswer: string;
   attemptCount: number;
   averageWml: number;
@@ -319,14 +374,50 @@ export async function submitNodeAttempt(params: {
     throw new Error("Gemini learner evaluation hint must be a string or null.");
   }
 
+  const hint = typeof result.hint === "string" ? result.hint.trim() : "";
+  const tutorFeedback = [result.feedback.trim(), hint].filter(Boolean).join(" ");
+  const conceptKey = normalizeConceptName(node.conceptName);
+  const activeCapacityThreshold =
+    params.capacityThreshold ?? plan.capacityThreshold ?? DEFAULT_WML_CAPACITY;
+  let attemptNumber = 0;
+  for (let retries = 0; retries < 5; retries += 1) {
+    const latestAttempt = await AttemptLog.findOne({
+      userId: params.userId,
+      planId: params.planId,
+      nodeId: params.nodeId,
+    }).sort({ attemptNumber: -1 }).select("attemptNumber");
+    attemptNumber = (latestAttempt?.attemptNumber ?? 0) + 1;
+    try {
+      await AttemptLog.create({
+        userId: params.userId,
+        planId: params.planId,
+        nodeId: params.nodeId,
+        conceptKey,
+        attemptNumber,
+        questionPrompt: params.lesson.checkQuestion,
+        taskContext: params.lesson.explanation,
+        userAnswer: params.userAnswer,
+        isCorrect: result.mastered,
+        wmlScore: params.wmlAssessment,
+        tutorFeedback,
+      });
+      break;
+    } catch (error) {
+      if (
+        (error as { code?: number })?.code !== 11000 ||
+        retries === 4
+      ) {
+        throw error;
+      }
+    }
+  }
+
   const calculation = calculateCognitiveEfficiency({
     mastered: result.mastered,
     attemptCount: params.attemptCount,
     averageWml: params.averageWml,
-    capacityThreshold: params.capacityThreshold ?? DEFAULT_WML_CAPACITY,
+    capacityThreshold: activeCapacityThreshold,
   });
-  const hint = typeof result.hint === "string" ? result.hint.trim() : "";
-  const tutorFeedback = [result.feedback.trim(), hint].filter(Boolean).join(" ");
   await Plan.updateOne({ _id: params.planId, userId: params.userId }, {
     $set: { capacityThreshold: calculation.updatedCapacityThreshold },
   });
@@ -339,7 +430,7 @@ export async function submitNodeAttempt(params: {
       { _id: node._id, planId: params.planId },
       {
         $set: {
-          attemptCount: params.attemptCount,
+          attemptCount: attemptNumber,
           wmlSamples: params.wmlSamples ?? node.wmlSamples ?? [],
           lastAttempt: params.userAnswer,
           lastTutorFeedback: tutorFeedback,
@@ -347,7 +438,7 @@ export async function submitNodeAttempt(params: {
         },
         $push: {
           attempts: {
-            attemptNumber: params.attemptCount,
+            attemptNumber,
             learnerAnswer: params.userAnswer,
             wmlScore: params.averageWml,
             tutorFeedback,
@@ -360,7 +451,6 @@ export async function submitNodeAttempt(params: {
   ]);
 
   if (result.mastered) {
-    const conceptKey = normalizeConceptName(node.conceptName);
     await UserMastery.updateOne(
       {
         userId: params.userId,

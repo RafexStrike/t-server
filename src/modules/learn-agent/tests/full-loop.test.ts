@@ -9,6 +9,7 @@ import { Plan } from "../../plan-agent/models/Plan.js";
 import { PlanNode } from "../../plan-agent/models/PlanNode.js";
 import { UserLearningSlots } from "../../plan-agent/models/UserLearningSlots.js";
 import { UserMastery } from "../../plan-agent/models/UserMastery.js";
+import { AttemptLog } from "../models/AttemptLog.js";
 import { evaluateUserIntent } from "../../plan-agent/services/clarify-service.js";
 import { getNextDiagnosticNode } from "../../plan-agent/services/diagnostic-engine.js";
 import {
@@ -19,6 +20,7 @@ import { processDiagnosticAnswer } from "../../plan-agent/services/diagnostic-ev
 import { createLearningPlan } from "../../plan-agent/services/plan-service.js";
 import { getOuterFringe } from "../services/outer-fringe.js";
 import { loadLearningNodeState, prepareNodeLesson, submitNodeAttempt } from "../services/micro-tutor.js";
+import type { WmlAssessment } from "../types/wml.js";
 
 interface GeminiRequestBody {
   systemInstruction?: { parts?: Array<{ text?: string }> };
@@ -120,6 +122,16 @@ const simpleLesson = {
   expectedCriteria: "It retains access to lexical scope.",
 };
 
+const testWmlAssessment: WmlAssessment = {
+  intrinsic: { bloomFactor: 0.2, directPrereqFactor: 0.25, transitiveDepthFactor: 0.125, score: 0.2 },
+  extrinsic: { sentenceLengthFactor: 0.1, lexicalDensityFactor: 0.2, codeDensityFactor: 0, novelTermFactor: 0.1, score: 0.12 },
+  totalWml: 0.42,
+  capacityThreshold: 0.70,
+  loadLevel: "OPTIMAL",
+  isOverloaded: false,
+  scaffoldingDirectives: [],
+};
+
 const denseLesson = {
   explanation: "A sophisticated implementation coordinates lexical environments, mutable bindings, and deferred execution.\n```javascript\nconst scope = { value: 1 };\nfunction createClosure() { return () => scope.value; }\n``` Closure Applications reveal how this abstraction preserves contextual references.",
   checkQuestion: "How does the implementation retain its contextual reference?",
@@ -142,6 +154,7 @@ test(
       if (user) {
         const plans = await Plan.find({ userId: user._id }).select("_id");
         const planIds = plans.map((plan) => plan._id);
+        await AttemptLog.deleteMany({ userId: user._id });
         await PlanNode.deleteMany({ planId: { $in: planIds } });
         await Plan.deleteMany({ userId: user._id });
         await UserLearningSlots.deleteMany({ userId: user._id });
@@ -288,6 +301,7 @@ test(
         userId: userId!,
         nodeId,
         lesson: simpleLesson,
+        wmlAssessment: testWmlAssessment,
         userAnswer: "It copies the value.",
         attemptCount: 1,
         averageWml: 0.5,
@@ -314,6 +328,18 @@ test(
         wmlScore: 0.5,
         passed: false,
       }]);
+      const persistedAttempt = await AttemptLog.findOne({ planId: plan._id, nodeId });
+      assert.ok(persistedAttempt);
+      assert.equal(persistedAttempt.userAnswer, "It copies the value.");
+      assert.equal(persistedAttempt.wmlScore.intrinsic.score, testWmlAssessment.intrinsic.score);
+      assert.equal(persistedAttempt.wmlScore.extrinsic.score, testWmlAssessment.extrinsic.score);
+      assert.equal(persistedAttempt.wmlScore.totalWml, testWmlAssessment.totalWml);
+      assert.equal(persistedAttempt.wmlScore.capacityThreshold, testWmlAssessment.capacityThreshold);
+      assert.equal(persistedAttempt.isCorrect, false);
+      assert.equal(
+        persistedAttempt.tutorFeedback,
+        "Distinguish retained scope from copied values. Track the outer binding.",
+      );
       const resumed = await loadLearningNodeState(plan._id.toString(), userId!, nodeId);
       assert.equal(resumed.capacityThreshold, 0.74);
       assert.equal((await User.findById(userId))?.capacityThreshold, 0.74);
@@ -338,6 +364,50 @@ test(
       assert.ok(remediationPrompt.includes("It copies the value."));
       assert.ok(remediationPrompt.includes("Distinguish retained scope from copied values."));
       assert.ok(remediationPrompt.includes("Track the outer binding."));
+      assert.ok(remediationPrompt.includes("Prior Mistake History"));
+      assert.ok(remediationPrompt.includes("WML: OPTIMAL"));
+    });
+
+    await t.test("attempt logs persist passing and failing answers with durable sequence numbers", async () => {
+      const { plan, nodes } = await createPlanFixture(userId!, "Attempt log sequence", [
+        { conceptName: "Persistent Attempts", bloomLevel: 2, status: "IN_PROGRESS" },
+      ]);
+      const nodeId = nodes[0]._id.toString();
+      harness.enqueue({ mastered: false, feedback: "Revisit the distinction.", hint: null });
+      await submitNodeAttempt({
+        planId: plan._id.toString(),
+        userId: userId!,
+        nodeId,
+        lesson: simpleLesson,
+        wmlAssessment: testWmlAssessment,
+        userAnswer: "First answer",
+        attemptCount: 9,
+        averageWml: 0.42,
+        apiKey,
+      });
+      harness.enqueue({ mastered: true, feedback: "That is correct.", hint: null });
+      await submitNodeAttempt({
+        planId: plan._id.toString(),
+        userId: userId!,
+        nodeId,
+        lesson: simpleLesson,
+        wmlAssessment: testWmlAssessment,
+        userAnswer: "Correct answer",
+        attemptCount: 10,
+        averageWml: 0.42,
+        apiKey,
+      });
+      const attempts = await AttemptLog.find({ planId: plan._id, nodeId }).sort({ attemptNumber: 1 });
+      assert.deepEqual(attempts.map((attempt) => ({
+        attemptNumber: attempt.attemptNumber,
+        userAnswer: attempt.userAnswer,
+        isCorrect: attempt.isCorrect,
+      })), [
+        { attemptNumber: 1, userAnswer: "First answer", isCorrect: false },
+        { attemptNumber: 2, userAnswer: "Correct answer", isCorrect: true },
+      ]);
+      assert.equal(attempts[0].questionPrompt, simpleLesson.checkQuestion);
+      assert.equal(attempts[0].taskContext, simpleLesson.explanation);
     });
 
     await t.test("mastery scores upsert by attempt and preserve a higher cross-plan score", async () => {
@@ -353,6 +423,7 @@ test(
           userId: userId!,
           nodeId: nodes[index]._id.toString(),
           lesson: simpleLesson,
+          wmlAssessment: testWmlAssessment,
           userAnswer: "Correct answer.",
           attemptCount,
           averageWml: 0.2,
@@ -381,6 +452,7 @@ test(
         userId: userId!,
         nodeId: laterPlan.nodes[0]._id.toString(),
         lesson: simpleLesson,
+        wmlAssessment: testWmlAssessment,
         userAnswer: "Correct answer.",
         attemptCount: 3,
         averageWml: 1,
@@ -511,6 +583,7 @@ test(
             userId: userId!,
             nodeId: node._id.toString(),
             lesson: firstTurn.lesson,
+            wmlAssessment: firstTurn.wmlAssessment,
             userAnswer: "The closure copies the value.",
             attemptCount: 1,
             averageWml: 0.6,
@@ -538,6 +611,7 @@ test(
             userId: userId!,
             nodeId: node._id.toString(),
             lesson: remediationTurn.lesson,
+            wmlAssessment: remediationTurn.wmlAssessment,
             userAnswer: "It retains access to the outer lexical environment.",
             attemptCount: 2,
             averageWml: 0.4,
@@ -569,6 +643,7 @@ test(
             userId: userId!,
             nodeId: node._id.toString(),
             lesson: overloaded.lesson,
+            wmlAssessment: overloaded.wmlAssessment,
             userAnswer: "The closure can be used to retain and apply scoped state.",
             attemptCount: 1,
             averageWml: 0.2,

@@ -17,12 +17,17 @@ export function getMicroLessonPrompt(input: TutorTurnPromptInput): string {
   const remediation = input.previousAttempt !== undefined && input.tutorFeedback !== undefined
     ? `\nThe learner's previous attempt was: ${input.previousAttempt}\nTutor feedback identifying the misconception: ${input.tutorFeedback}\nAddress that specific misconception concisely. Do not repeat the full prior lecture.`
     : "";
+  const priorMistakes = input.priorMistakeHistory?.length
+    ? `\n\nPrior Mistake History (most recent first):\n${input.priorMistakeHistory.map((attempt) =>
+      `- Attempt ${attempt.attemptNumber}: wrong answer: ${attempt.userAnswer}\n  WML: ${attempt.loadLevel}${attempt.isOverloaded ? " (overload)" : ""}\n  Tutor feedback: ${attempt.tutorFeedback}`,
+    ).join("\n")}`
+    : "";
   const directives = input.scaffoldingDirectives.length
     ? input.scaffoldingDirectives.map((directive) => `- ${directive}`).join("\n")
     : "- Keep the lesson focused and concise; teach only the requested node.";
   const preGate = `\nSystem 1 intrinsic pre-gate: mode=${input.preGateResult.mode}; remaining extrinsic load budget=${input.preGateResult.extrinsicBudget.toFixed(2)}.${input.preGateResult.mode === "OPTIMAL" ? " No additional pre-gate restrictions apply." : ` Treat this budget as a strict constraint.\n${input.preGateResult.proactiveDirectives.map((directive) => `- ${directive}`).join("\n")}`}`;
 
-  return `Act as a node-scoped Micro-Tutor. Teach strictly the concept "${input.conceptName}" at Bloom level ${input.bloomLevel}: ${bloomName}. The topic "${input.topic}" may only be used to disambiguate terminology; do not teach adjacent concepts or other nodes.\n\nMandatory System 1 scaffolding constraints (follow every directive):\n${directives}${preGate}${remediation}\n\nReturn only strict JSON with exactly these string fields: { "explanation": string, "checkQuestion": string, "expectedCriteria": string }.`;
+  return `Act as a node-scoped Micro-Tutor. Teach strictly the concept "${input.conceptName}" at Bloom level ${input.bloomLevel}: ${bloomName}. The topic "${input.topic}" may only be used to disambiguate terminology; do not teach adjacent concepts or other nodes.\n\nMandatory System 1 scaffolding constraints (follow every directive):\n${directives}${preGate}${remediation}${priorMistakes}\n\nReturn only strict JSON with exactly these string fields: { "explanation": string, "checkQuestion": string, "expectedCriteria": string }.`;
 }
 
 export function getLearnerEvaluationPrompt(

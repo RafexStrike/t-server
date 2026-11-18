@@ -9,6 +9,7 @@ import { PlanNode } from "../../plan-agent/models/PlanNode.js";
 import { UserMastery } from "../../plan-agent/models/UserMastery.js";
 import { getOuterFringe, syncPriorUserMastery } from "../services/outer-fringe.js";
 import { prepareNodeLesson, submitNodeAttempt } from "../services/micro-tutor.js";
+import type { WmlAssessment } from "../types/wml.js";
 import { calculateCognitiveEfficiency } from "../utils/cognitive-efficiency.js";
 import { getLearningFringeState, selectOuterFringe } from "../utils/outer-fringe-selector.js";
 import {
@@ -17,6 +18,16 @@ import {
   evaluateWorkingMemoryLoad,
   preGateIntrinsicLoad,
 } from "../utils/wml-calculator.js";
+
+const testWmlAssessment: WmlAssessment = {
+  intrinsic: { bloomFactor: 0.2, directPrereqFactor: 0.25, transitiveDepthFactor: 0.125, score: 0.2 },
+  extrinsic: { sentenceLengthFactor: 0.1, lexicalDensityFactor: 0.2, codeDensityFactor: 0, novelTermFactor: 0.1, score: 0.12 },
+  totalWml: 0.42,
+  capacityThreshold: 0.70,
+  loadLevel: "OPTIMAL",
+  isOverloaded: false,
+  scaffoldingDirectives: [],
+};
 
 test("Intrinsic pre-gate is deterministic across Bloom levels and learner capacities", () => {
   for (let bloomLevel = 1; bloomLevel <= 6; bloomLevel += 1) {
@@ -247,6 +258,7 @@ test(
         userId,
         nodeId: closureNodes[0]._id.toString(),
         lesson,
+        wmlAssessment: testWmlAssessment,
         userAnswer: "Its lexical scope",
         attemptCount: 3,
         averageWml: 1,
@@ -261,6 +273,7 @@ test(
         userId,
         nodeId: closureNodes[1]._id.toString(),
         lesson,
+        wmlAssessment: testWmlAssessment,
         userAnswer: "Its lexical scope",
         attemptCount: 3,
         averageWml: 1,
