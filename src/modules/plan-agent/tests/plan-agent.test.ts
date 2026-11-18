@@ -11,6 +11,8 @@ import { Plan } from "../models/Plan.js";
 import { PlanNode } from "../models/PlanNode.js";
 import { User } from "../../auth/models/User.js";
 import { UserLearningSlots } from "../models/UserLearningSlots.js";
+import { TelemetryEvent } from "../../telemetry/models/TelemetryEvent.js";
+import { useTemporaryJsonl } from "../../telemetry/tests/temporary-jsonl.js";
 import { registerUser, verifySessionToken } from "../../auth/services/auth-service.js";
 import { env, validateEnv } from "../../../config/env.js";
 import { parsePlanChoice } from "../runner/plan-choice.js";
@@ -41,6 +43,7 @@ test("Environment validation allows complete MongoDB URIs without separate crede
 });
 
 test("Plan Agent Integration Test Suite", async (t) => {
+  await useTemporaryJsonl(t);
   // 1. Ensure Database Connection
   await t.test("Database Connection", async () => {
     await connectToDatabase();
@@ -168,6 +171,7 @@ test("Plan Agent Integration Test Suite", async (t) => {
 
   // 6. Teardown
   await t.test("Teardown", async () => {
+    await TelemetryEvent.deleteMany({ userId: testUserId });
     if (createdPlanId) {
       await Plan.deleteMany({ userId: testUserId });
       await PlanNode.deleteMany({ planId: createdPlanId });

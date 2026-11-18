@@ -1,4 +1,6 @@
 import { fetchWithRetry } from "../../common/utils/retry.js";
+import { normalizeConceptName } from "../../common/utils/normalize-concept-name.js";
+import { recordTelemetryEvent } from "../../telemetry/services/telemetry-logger.js";
 import type {
   DiagnosticEvaluationResult,
   DiagnosticQuestion,
@@ -82,7 +84,9 @@ export async function generateDiagnosticQuestion(
   conceptName: string,
   bloomLevel: number,
   apiKey: string,
+  context?: { planId: string; userId: string; nodeId: string },
 ): Promise<DiagnosticQuestion> {
+  const startedAt = Date.now();
   const text = await requestGemini(
     getDiagnosticQuestionPrompt(topic, conceptName, bloomLevel),
     apiKey,
@@ -102,6 +106,16 @@ export async function generateDiagnosticQuestion(
     expectedCriteria: result.expectedCriteria.trim(),
   };
   console.log(`[Plan Agent] Generated diagnostic question for "${conceptName}" (Bloom ${bloomLevel}).`);
+  await recordTelemetryEvent({
+    ...(context
+      ? { planId: context.planId, userId: context.userId, nodeId: context.nodeId }
+      : {}),
+    conceptKey: normalizeConceptName(conceptName),
+    agent: "plan-agent",
+    eventType: "diagnostic_question_asked",
+    metrics: { durationMs: Date.now() - startedAt },
+    metadata: { topic, bloomLevel },
+  });
   return diagnosticQuestion;
 }
 

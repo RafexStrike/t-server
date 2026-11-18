@@ -6,6 +6,7 @@ import { AttemptLog } from "../models/AttemptLog.js";
 import { Plan } from "../../plan-agent/models/Plan.js";
 import { PlanNode } from "../../plan-agent/models/PlanNode.js";
 import { UserMastery } from "../../plan-agent/models/UserMastery.js";
+import { recordTelemetryEvent } from "../../telemetry/services/telemetry-logger.js";
 import type {
   GeneratedTutorTurn,
   LearnerEvaluationPromptInput,
@@ -208,6 +209,7 @@ export async function prepareNodeLesson(params: {
   tutorFeedback?: string;
   scaffoldingDirectives?: string[];
 }): Promise<GeneratedTutorTurn> {
+  const startedAt = Date.now();
   const { plan, node } = await verifyPlanAndNode(params);
   const effectiveCapacity =
     params.capacityThreshold ?? plan.capacityThreshold ?? DEFAULT_WML_CAPACITY;
@@ -257,6 +259,20 @@ export async function prepareNodeLesson(params: {
   console.log(
     `[Learn Agent][System 1 Pre-Gate] Node="${node.conceptName}" bloom=${node.bloomLevel} IL=${preGate.intrinsicLoad.toFixed(2)} budget=${preGate.extrinsicBudget.toFixed(2)} mode=${preGate.mode}`,
   );
+  await recordTelemetryEvent({
+    userId: params.userId,
+    planId: params.planId,
+    nodeId: params.nodeId,
+    conceptKey: normalizeConceptName(node.conceptName),
+    agent: "learn-agent-system-1",
+    eventType: "wml_pre_gate_assessed",
+    metrics: { intrinsicLoad: preGate.intrinsicLoad, capacityThreshold: effectiveCapacity },
+    metadata: {
+      extrinsicBudget: preGate.extrinsicBudget,
+      mode: preGate.mode,
+      bloomLevel: node.bloomLevel,
+    },
+  });
 
   const remediation = previousAttempt !== undefined && tutorFeedback !== undefined;
   const initialDirectives = [...new Set([
@@ -303,7 +319,28 @@ export async function prepareNodeLesson(params: {
     textToMeasure: `${lesson.explanation}\n\n${lesson.checkQuestion}`,
     capacityThreshold: effectiveCapacity,
   });
+  const initialAssessment = wmlAssessment;
   let wasRegeneratedForOverload = false;
+  const recordAssessment = async (
+    assessment: WmlAssessment,
+    attemptIndex: number,
+  ) => recordTelemetryEvent({
+    userId: params.userId,
+    planId: params.planId,
+    nodeId: params.nodeId,
+    conceptKey: normalizeConceptName(node.conceptName),
+    agent: "learn-agent-system-1",
+    eventType: "lesson_wml_assessed",
+    metrics: {
+      intrinsicLoad: assessment.intrinsic.score,
+      extrinsicLoad: assessment.extrinsic.score,
+      totalWmlScore: assessment.totalWml,
+      capacityThreshold: assessment.capacityThreshold,
+      isOverloaded: assessment.isOverloaded,
+      attemptIndex,
+    },
+  });
+  await recordAssessment(initialAssessment, 0);
 
   const exceedsExtrinsicBudget =
     0.45 * wmlAssessment.extrinsic.score > preGate.extrinsicBudget;
@@ -326,7 +363,33 @@ export async function prepareNodeLesson(params: {
       capacityThreshold: effectiveCapacity,
     });
     wasRegeneratedForOverload = true;
+    await recordAssessment(wmlAssessment, 1);
   }
+
+  await recordTelemetryEvent({
+    userId: params.userId,
+    planId: params.planId,
+    nodeId: params.nodeId,
+    conceptKey: normalizeConceptName(node.conceptName),
+    agent: "learn-agent-system-1",
+    eventType: wasRegeneratedForOverload ? "lesson_regenerated" : "lesson_generated",
+    metrics: {
+      intrinsicLoad: wmlAssessment.intrinsic.score,
+      extrinsicLoad: wmlAssessment.extrinsic.score,
+      totalWmlScore: wmlAssessment.totalWml,
+      capacityThreshold: wmlAssessment.capacityThreshold,
+      isOverloaded: wmlAssessment.isOverloaded,
+      regenerationCount: wasRegeneratedForOverload ? 1 : 0,
+      attemptIndex: wasRegeneratedForOverload ? 1 : 0,
+      ...(wasRegeneratedForOverload ? { regenerationReason: "wml_overload" } : {}),
+      durationMs: Date.now() - startedAt,
+    },
+    metadata: {
+      initialIntrinsicLoad: initialAssessment.intrinsic.score,
+      initialExtrinsicLoad: initialAssessment.extrinsic.score,
+      initialTotalWmlScore: initialAssessment.totalWml,
+    },
+  });
 
   return {
     nodeId: node._id.toString(),
@@ -353,6 +416,7 @@ export async function submitNodeAttempt(params: {
   wmlSamples?: number[];
   apiKey: string;
 }): Promise<LearnerTurnEvaluation> {
+  const startedAt = Date.now();
   const { plan, node } = await verifyPlanAndNode(params);
   const evaluationInput: LearnerEvaluationPromptInput = {
     topic: plan.topic,
@@ -470,9 +534,55 @@ export async function submitNodeAttempt(params: {
   }
 
   const masteryScore = result.mastered ? calculation.durableMasteryScore : 0.25;
+  const normalizedAttemptCount = Math.max(1, Math.floor(params.attemptCount));
+  const performanceScore = !result.mastered
+    ? 0.25
+    : normalizedAttemptCount === 1
+      ? 1
+      : normalizedAttemptCount === 2
+        ? 0.85
+        : 0.75;
+  const mentalEffortScore = Number.isFinite(params.averageWml)
+    ? Math.min(1, Math.max(0, params.averageWml))
+    : 0;
   console.log(
     `[Learn Agent][System 2] Concept="${node.conceptName}" | Mastered=${result.mastered} | Efficiency=${calculation.efficiencyScore.toFixed(2)} | Mastery=${masteryScore.toFixed(2)} | Capacity=${calculation.updatedCapacityThreshold.toFixed(2)}.`,
   );
+  const telemetryMetrics = {
+    intrinsicLoad: params.wmlAssessment.intrinsic.score,
+    extrinsicLoad: params.wmlAssessment.extrinsic.score,
+    totalWmlScore: params.wmlAssessment.totalWml,
+    capacityThreshold: params.wmlAssessment.capacityThreshold,
+    isOverloaded: params.wmlAssessment.isOverloaded,
+    paasEfficiency: calculation.efficiencyScore,
+    performanceScore,
+    mentalEffortScore,
+    previousThreshold: activeCapacityThreshold,
+    updatedThreshold: calculation.updatedCapacityThreshold,
+    attemptIndex: attemptNumber,
+    durationMs: Date.now() - startedAt,
+  };
+  const eventContext = {
+    userId: params.userId,
+    planId: params.planId,
+    nodeId: params.nodeId,
+    conceptKey,
+    agent: "learn-agent-system-2" as const,
+  };
+  await recordTelemetryEvent({
+    ...eventContext,
+    eventType: "attempt_evaluated",
+    metrics: telemetryMetrics,
+    metadata: { correct: result.mastered, masteryScore },
+  });
+  if (activeCapacityThreshold !== calculation.updatedCapacityThreshold) {
+    await recordTelemetryEvent({
+      ...eventContext,
+      eventType: "threshold_adjusted",
+      metrics: telemetryMetrics,
+      metadata: { correct: result.mastered },
+    });
+  }
   return {
     mastered: result.mastered,
     feedback: result.feedback.trim(),

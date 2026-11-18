@@ -7,6 +7,8 @@ import { normalizeConceptName } from "../../common/utils/normalize-concept-name.
 import { Plan } from "../../plan-agent/models/Plan.js";
 import { PlanNode } from "../../plan-agent/models/PlanNode.js";
 import { UserMastery } from "../../plan-agent/models/UserMastery.js";
+import { TelemetryEvent } from "../../telemetry/models/TelemetryEvent.js";
+import { useTemporaryJsonl } from "../../telemetry/tests/temporary-jsonl.js";
 import { getOuterFringe, syncPriorUserMastery } from "../services/outer-fringe.js";
 import { prepareNodeLesson, submitNodeAttempt } from "../services/micro-tutor.js";
 import type { WmlAssessment } from "../types/wml.js";
@@ -183,6 +185,7 @@ test(
   "MongoDB reconciles prior mastery case-insensitively and enforces Outer Fringe ownership",
   { skip: !process.env.MONGODB_URI?.trim() },
   async (t) => {
+    await useTemporaryJsonl(t);
     const userId = new Types.ObjectId().toString();
     const otherUserId = new Types.ObjectId().toString();
     let planId: string | undefined;
@@ -194,6 +197,7 @@ test(
         await Plan.deleteOne({ _id: planId });
       }
       await UserMastery.deleteMany({ userId });
+      await TelemetryEvent.deleteMany({ userId });
       await disconnectFromDatabase();
     });
 

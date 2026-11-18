@@ -2,8 +2,10 @@ import mongoose, { Types } from "mongoose";
 import { Plan } from "../models/Plan.js";
 import { PlanNode } from "../models/PlanNode.js";
 import { User } from "../../auth/models/User.js";
+import { normalizeConceptName } from "../../common/utils/normalize-concept-name.js";
+import { recordTelemetryEvent } from "../../telemetry/services/telemetry-logger.js";
 import { generateAbsoluteMasteryGraph } from "./graph-generator.js";
-import { breakPrerequisiteCycles, pruneGraph } from "../utils/graph-pruner.js";
+import { breakPrerequisiteCycles, pruneGraphWithStats } from "../utils/graph-pruner.js";
 
 /**
  * Generates and stores a user's requested learning plan and its prerequisite
@@ -15,6 +17,7 @@ export async function createLearningPlan(
   targetDepth: number,
   apiKey: string,
 ) {
+  const startedAt = Date.now();
   if (!Types.ObjectId.isValid(userId)) {
     throw new Error("A valid authenticated user ObjectId is required to create a learning plan.");
   }
@@ -29,7 +32,10 @@ export async function createLearningPlan(
   const rawGraph = await generateAbsoluteMasteryGraph(topic, apiKey);
 
   console.log(`[Plan Agent] Pruning graph to Bloom level ${targetDepth}.`);
-  const prunedGraph = pruneGraph(rawGraph, targetDepth);
+  const { nodes: prunedGraph, stats: pruningStats } = pruneGraphWithStats(
+    rawGraph,
+    targetDepth,
+  );
   if (prunedGraph.length === 0) {
     throw new Error(
       `Cannot create learning plan for "${topic}": graph pruning produced 0 valid nodes at targetDepth ${targetDepth}.`,
@@ -93,6 +99,18 @@ export async function createLearningPlan(
     console.log(
       `[Plan Agent] Inserted ${nodesToInsert.length} PlanNode documents for user ${ownerId.toString()}.`,
     );
+    await recordTelemetryEvent({
+      userId: ownerId,
+      planId: plan._id,
+      conceptKey: normalizeConceptName(topic),
+      agent: "plan-agent",
+      eventType: "plan_generated",
+      metrics: {
+        ...pruningStats,
+        durationMs: Date.now() - startedAt,
+      },
+      metadata: { topic, targetDepth },
+    });
   } catch (error) {
     await PlanNode.deleteMany({ planId: plan._id });
     await Plan.deleteOne({ _id: plan._id, userId: ownerId });

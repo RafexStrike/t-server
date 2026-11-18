@@ -206,6 +206,7 @@ async function runDiagnostics(planId: string, userId: string): Promise<void> {
       node.conceptName,
       node.bloomLevel,
       apiKey,
+      { planId, userId, nodeId: node._id.toString() },
     );
     const bloomLevelName = BLOOM_LEVEL_NAMES[node.bloomLevel - 1] ?? "Unknown";
     console.log();

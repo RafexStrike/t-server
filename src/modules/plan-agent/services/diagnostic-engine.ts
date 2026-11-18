@@ -2,6 +2,8 @@ import { Types } from "mongoose";
 import { Plan } from "../models/Plan.js";
 import { PlanNode } from "../models/PlanNode.js";
 import type { PlanNodeDocument } from "../models/PlanNode.js";
+import { normalizeConceptName } from "../../common/utils/normalize-concept-name.js";
+import { countTelemetryEvents, recordTelemetryEvent } from "../../telemetry/services/telemetry-logger.js";
 
 function collectPendingAncestors(
   node: PlanNodeDocument,
@@ -75,13 +77,32 @@ export async function getNextDiagnosticNode(
   const pendingNodes = await PlanNode.find({ planId, status: "PENDING" }).sort({
     conceptName: 1,
   });
+  const allNodes = await PlanNode.find({ planId });
 
   if (pendingNodes.length === 0) {
     console.log(`[Plan Agent] Diagnostic complete for plan ${planId}: no pending nodes.`);
+    const actualDiagnosticQuestions = await countTelemetryEvents({
+      agent: "plan-agent",
+      eventType: "diagnostic_question_asked",
+      planId,
+    });
+    const baselineQuestions = allNodes.length;
+    await recordTelemetryEvent({
+      planId,
+      userId,
+      agent: "plan-agent",
+      eventType: "diagnostic_completed",
+      metrics: {
+        baselineQuestions,
+        actualDiagnosticQuestions,
+        diagnosticQuestionReductionPct: baselineQuestions
+          ? ((baselineQuestions - actualDiagnosticQuestions) / baselineQuestions) * 100
+          : 0,
+      },
+    });
     return null;
   }
 
-  const allNodes = await PlanNode.find({ planId });
   const nodesById = new Map(
     allNodes.map((node) => [node._id.toString(), node] as const),
   );
@@ -110,6 +131,15 @@ export async function getNextDiagnosticNode(
     console.log(
       `[Plan Agent] Diagnostic information score: "${node.conceptName}"; pendingAncestors=${pendingAncestors}; pendingDescendants=${pendingDescendants}; score=${informationScore}.`,
     );
+    await recordTelemetryEvent({
+      planId,
+      userId,
+      nodeId: node._id.toString(),
+      conceptKey: normalizeConceptName(node.conceptName),
+      agent: "plan-agent",
+      eventType: "diagnostic_node_scored",
+      metadata: { pendingAncestors, pendingDescendants, informationScore },
+    });
 
     if (informationScore < lowestScore) {
       lowestScore = informationScore;
@@ -120,5 +150,16 @@ export async function getNextDiagnosticNode(
   console.log(
     `[Plan Agent] Selected diagnostic node: "${selectedNode?.conceptName ?? "none"}" (score=${lowestScore}).`,
   );
+  if (selectedNode) {
+    await recordTelemetryEvent({
+      planId,
+      userId,
+      nodeId: selectedNode._id.toString(),
+      conceptKey: normalizeConceptName(selectedNode.conceptName),
+      agent: "plan-agent",
+      eventType: "diagnostic_node_selected",
+      metadata: { informationScore: lowestScore },
+    });
+  }
   return selectedNode;
 }

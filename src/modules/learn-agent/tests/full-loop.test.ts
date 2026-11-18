@@ -9,6 +9,8 @@ import { Plan } from "../../plan-agent/models/Plan.js";
 import { PlanNode } from "../../plan-agent/models/PlanNode.js";
 import { UserLearningSlots } from "../../plan-agent/models/UserLearningSlots.js";
 import { UserMastery } from "../../plan-agent/models/UserMastery.js";
+import { TelemetryEvent } from "../../telemetry/models/TelemetryEvent.js";
+import { useTemporaryJsonl } from "../../telemetry/tests/temporary-jsonl.js";
 import { normalizeConceptName } from "../../common/utils/normalize-concept-name.js";
 import { AttemptLog } from "../models/AttemptLog.js";
 import { evaluateUserIntent } from "../../plan-agent/services/clarify-service.js";
@@ -112,6 +114,7 @@ test(
   "Deterministic mocked tests cover the full Plan Agent and Learn Agent loop",
   { skip: !process.env.MONGODB_URI?.trim() },
   async (t) => {
+    await useTemporaryJsonl(t);
     await connectToDatabase();
     const email = `full-loop-${Date.now()}-${Math.random().toString(36).slice(2)}@example.test`;
     let userId: string | undefined;
@@ -123,6 +126,7 @@ test(
         const plans = await Plan.find({ userId: user._id }).select("_id");
         const planIds = plans.map((plan) => plan._id);
         await AttemptLog.deleteMany({ userId: user._id });
+        await TelemetryEvent.deleteMany({ userId: user._id });
         await PlanNode.deleteMany({ planId: { $in: planIds } });
         await Plan.deleteMany({ userId: user._id });
         await UserLearningSlots.deleteMany({ userId: user._id });

@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "tsx watch src/server.ts",
     "build": "tsc",
+    "test": "node --import tsx --test src/modules/plan-agent/tests/*.test.ts src/modules/learn-agent/tests/*.test.ts src/modules/telemetry/tests/*.test.ts",
     "start": "node dist/server.js",
     "test-plan-agent": "node --import tsx --test src/modules/plan-agent/tests/*.test.ts",
     "test-learn-agent": "node --import tsx --test src/modules/learn-agent/tests/learn-agent.test.ts",

@@ -2,6 +2,8 @@ import { Types } from "mongoose";
 import { Plan } from "../models/Plan.js";
 import { PlanNode } from "../models/PlanNode.js";
 import type { PlanNodeDocument } from "../models/PlanNode.js";
+import { normalizeConceptName } from "../../common/utils/normalize-concept-name.js";
+import { recordTelemetryEvent } from "../../telemetry/services/telemetry-logger.js";
 
 function collectPendingAncestors(
   node: PlanNodeDocument,
@@ -118,4 +120,13 @@ export async function processDiagnosticAnswer(
   console.log(
     `[Plan Agent] Diagnostic answer ${passed ? "passed" : "failed"} for "${node.conceptName}"; updated ${affectedNodeIds.length} ${passed ? "pending ancestors" : "pending descendants"} to ${nextStatus}.`,
   );
+  await recordTelemetryEvent({
+    userId,
+    planId: node.planId,
+    nodeId: node._id.toString(),
+    conceptKey: normalizeConceptName(node.conceptName),
+    agent: "plan-agent",
+    eventType: "diagnostic_answer_evaluated",
+    metadata: { passed, affectedNodeCount: affectedNodeIds.length, nextStatus },
+  });
 }

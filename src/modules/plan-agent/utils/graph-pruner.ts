@@ -12,9 +12,28 @@ export function pruneGraph(
   rawGraph: RawGraphNode[],
   targetDepth: number,
 ): RawGraphNode[] {
+  return pruneGraphWithStats(rawGraph, targetDepth).nodes;
+}
+
+export function pruneGraphWithStats(
+  rawGraph: RawGraphNode[],
+  targetDepth: number,
+): {
+  nodes: RawGraphNode[];
+  stats: {
+    rawNodeCount: number;
+    prunedNodeCount: number;
+    duplicateNodeCount: number;
+    cycleEdgesRemoved: number;
+    depthFilteredNodeCount: number;
+    unreachableNodeCount: number;
+  };
+} {
+  const depthEligibleNodes = rawGraph.filter(
+    (node) => node.bloomLevel <= targetDepth,
+  );
   const uniqueNodesByKey = new Map<string, RawGraphNode>();
-  for (const node of rawGraph) {
-    if (node.bloomLevel > targetDepth) continue;
+  for (const node of depthEligibleNodes) {
     const key = normalizedConceptKey(node.conceptName);
     if (!uniqueNodesByKey.has(key)) uniqueNodesByKey.set(key, node);
   }
@@ -74,9 +93,24 @@ export function pruneGraph(
     visitAncestors(sink.conceptName);
   }
 
-  return breakPrerequisiteCycles(
-    filteredNodes.filter((node) => requiredNames.has(node.conceptName)),
+  const reachableNodes = filteredNodes.filter((node) =>
+    requiredNames.has(node.conceptName),
   );
+  const nodes = breakPrerequisiteCycles(reachableNodes);
+  const edgeCount = (graph: RawGraphNode[]) =>
+    graph.reduce((count, node) => count + node.prerequisiteNames.length, 0);
+
+  return {
+    nodes,
+    stats: {
+      rawNodeCount: rawGraph.length,
+      prunedNodeCount: nodes.length,
+      duplicateNodeCount: depthEligibleNodes.length - uniqueNodesByKey.size,
+      cycleEdgesRemoved: edgeCount(reachableNodes) - edgeCount(nodes),
+      depthFilteredNodeCount: rawGraph.length - depthEligibleNodes.length,
+      unreachableNodeCount: filteredNodes.length - reachableNodes.length,
+    },
+  };
 }
 
 /** Breaks prerequisite back-edges deterministically and verifies the result. */
