@@ -5,7 +5,7 @@ We are building a highly modular, backend-only (terminal-based) AI Educational H
 
 The harness is divided into two primary agents:
 *   **Plan Agent (Current Focus):** Diagnoses the user's intent, creates a mathematically sound curriculum graph (To-Do list), and tests the user's baseline knowledge.
-*   **Learn Agent (Future Phase):** Executes the plan using Working Memory Load (WML) constraints and pedagogical gatekeeping.
+*   **Learn Agent:** Executes the plan using synchronous System 1 Working Memory Load gating and System 2 Paas cognitive-efficiency updates.
 
 **Current Objective:** We are exclusively focusing on implementing the **Plan Agent** module from scratch. All user interactions will be simulated or handled via terminal/console outputs for now, without a frontend.
 
@@ -48,3 +48,13 @@ The Plan Agent follows a strict 5-step pipeline. It must not generate arbitrary 
 *   **Extensive Console Logging:** Because this is terminal-based, heavily use `console.log` to track the state. Output the current step, the state of the graph, entropy calculations, and LLM raw outputs to make debugging easy.
 *   **Separation of LLM and DB Logic:** Do not mix Mongoose schema saving logic directly inside LLM API call functions. Extract data, parse it, and then pass it to dedicated database service files.
 *   **Documentation:** Every file and major function must include comments explaining *why* it exists in the context of the educational theories mentioned above.
+
+## 5. Implemented State and Infrastructure
+
+The Learn Agent, adaptive diagnostics, Outer Fringe, ontology grounding, System 1 WML gatekeeping, System 2 Paas updates, shared Gemini client, dual MongoDB/JSONL telemetry, and CLI runner are implemented. Agent execution remains service/CLI-driven and has no Plan/Learn/Telemetry HTTP routes.
+
+Node lifecycle: `PENDING` is unresolved and diagnosable; `PASSED_IN_DIAGNOSTIC` records diagnostic mastery; `QUEUED` records diagnostic failure, budget deferral, or a remediating downstream/deferred target; `IN_PROGRESS` is reserved for Micro-Tutor activation; `MASTERED` is durable learning completion.
+
+A pass traverses PENDING and QUEUED ancestors for KST closure. A fail and question-budget cap queue nodes rather than falsely starting active learning. Cross-plan `UserMastery` reconciliation runs immediately after plan persistence and before diagnostics.
+
+`User.capacityThreshold` is the authoritative cognitive capacity source. The Gemini integration is centralized with API-key headers, request timeout, retry backoff, and JSON parsing. MongoDB and JSONL persist complementary attempt/telemetry data.

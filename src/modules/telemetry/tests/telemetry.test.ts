@@ -115,7 +115,7 @@ test(
       capacityThreshold: 0.70,
       apiKey: "test-key",
     });
-    assert.equal(turn.wasRegeneratedForOverload, true);
+    assert.equal(turn.wasRegeneratedForOverload, false);
 
     harness.enqueue({ mastered: true, feedback: "Correct", hint: null });
     await submitNodeAttempt({

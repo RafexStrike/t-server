@@ -87,6 +87,7 @@ async function printDiagnosticSummary(planId: string, userId: string): Promise<v
     "IN_PROGRESS",
     "MASTERED",
     "PENDING",
+    "QUEUED",
   ];
   const grouped = new Map<PlanNodeStatus, PlanNodeDocument[]>(
     statuses.map((status) => [status, []]),
@@ -96,11 +97,12 @@ async function printDiagnosticSummary(planId: string, userId: string): Promise<v
   const passed = grouped.get("PASSED_IN_DIAGNOSTIC")?.length ?? 0;
   const inProgress = grouped.get("IN_PROGRESS")?.length ?? 0;
   const pending = grouped.get("PENDING")?.length ?? 0;
+  const queued = grouped.get("QUEUED")?.length ?? 0;
   const mastered = grouped.get("MASTERED")?.length ?? 0;
   const lines = [
     `Plan ID: ${planId}`,
     `User ID: ${userId}`,
-    `[Total Concepts: ${nodes.length} | Finished during diagnosis: ${passed} | Queued for Micro-Tutor: ${inProgress + pending} (In Progress: ${inProgress}, Pending: ${pending}) | Mastered: ${mastered}]`,
+    `[Total Concepts: ${nodes.length} | Finished during diagnosis: ${passed} | Queued for Micro-Tutor: ${inProgress + pending + queued} (In Progress: ${inProgress}, Pending: ${pending}, Queued: ${queued}) | Mastered: ${mastered}]`,
     "",
   ];
   for (const status of statuses) {
@@ -159,7 +161,7 @@ async function createPlanForUser(userId: string): Promise<string> {
     const message = await terminal.question(
       evaluation?.nextQuestion ? `Clarification: ${evaluation.nextQuestion}\nYou: ` : "Learning goal: ",
     );
-    evaluation = await evaluateUserIntent(userId, message, env.GEMINI_API_KEY ?? "");
+    evaluation = await evaluateUserIntent(userId, message, env.GEMINI_API_KEY!);
     if (!evaluation.isComplete && evaluation.nextQuestion) {
       console.log(`[Runner] ${evaluation.nextQuestion}`);
     }
@@ -174,7 +176,7 @@ async function createPlanForUser(userId: string): Promise<string> {
     userId,
     topic,
     slots.targetDepth,
-    env.GEMINI_API_KEY ?? "",
+    env.GEMINI_API_KEY!,
   );
   await printSavedPlan(plan._id.toString(), userId);
   await clearUserLearningSlots(userId);
@@ -184,7 +186,7 @@ async function createPlanForUser(userId: string): Promise<string> {
 async function runDiagnostics(planId: string, userId: string): Promise<void> {
   const plan = await Plan.findOne({ _id: planId, userId });
   if (!plan) throw new Error(`Plan ${planId} could not be loaded for its owner.`);
-  const apiKey = env.GEMINI_API_KEY ?? "";
+  const apiKey = env.GEMINI_API_KEY!;
   const totalNodes = await PlanNode.countDocuments({ planId });
   const maxQuestions = Math.max(5, Math.min(10, Math.ceil(totalNodes * 0.4)));
   let questionsAsked = 0;
@@ -194,9 +196,9 @@ async function runDiagnostics(planId: string, userId: string): Promise<void> {
     if (questionsAsked >= maxQuestions) {
       await PlanNode.updateMany(
         { planId, status: "PENDING" },
-        { $set: { status: "IN_PROGRESS" } },
+        { $set: { status: "QUEUED" } },
       );
-      console.log(`[Runner] Diagnostic question budget (${maxQuestions}) reached; remaining pending concepts marked IN_PROGRESS.`);
+      console.log(`[Runner] Diagnostic question budget (${maxQuestions}) reached; remaining pending concepts marked QUEUED.`);
       await getNextDiagnosticNode(planId, userId);
       break;
     }
@@ -253,12 +255,14 @@ async function runDiagnostics(planId: string, userId: string): Promise<void> {
 }
 
 async function runLearningSession(planId: string, userId: string): Promise<void> {
-  const apiKey = env.GEMINI_API_KEY ?? "";
+  const apiKey = env.GEMINI_API_KEY!;
   const plan = await Plan.findOne({ _id: planId, userId });
   if (!plan) throw new Error(`Plan ${planId} could not be loaded for its owner.`);
   const learner = await User.findOne({ _id: userId }).select("capacityThreshold");
   if (!learner) throw new Error("Authenticated user could not be loaded for the learning session.");
   let capacityThreshold = learner.capacityThreshold ?? DEFAULT_WML_CAPACITY;
+  let preferredNodeId: string | undefined;
+  let consecutiveFailures = 0;
 
   console.log("=== Phase 2: Micro-Tutor Learning Session ===");
   while (true) {
@@ -290,7 +294,10 @@ async function runLearningSession(planId: string, userId: string): Promise<void>
       break;
     }
 
-    const selected = fringe.unlockedNodes.find((node) => node.nodeId === fringe.nextNodeId);
+    const preferred = preferredNodeId
+      ? fringe.unlockedNodes.find((node) => node.nodeId === preferredNodeId)
+      : undefined;
+    const selected = preferred ?? fringe.unlockedNodes.find((node) => node.nodeId === fringe.nextNodeId);
     if (!selected) throw new Error("Outer Fringe selected a node that was not in its candidate list.");
     console.log(
       `[Runner] Outer Fringe candidates: ${fringe.unlockedNodes.length} | Selected: ${selected.conceptName} (Bloom ${selected.bloomLevel}) | Remaining: ${fringe.remainingCount}.`,
@@ -373,6 +380,7 @@ async function runLearningSession(planId: string, userId: string): Promise<void>
       if (evaluation.mastered) {
         console.log(`[Mastered] ${evaluation.feedback}`);
         console.log(`[Runner] Updated cognitive capacity threshold: ${capacityThreshold.toFixed(2)}.`);
+        consecutiveFailures = 0;
         break;
       }
 
@@ -381,6 +389,34 @@ async function runLearningSession(planId: string, userId: string): Promise<void>
       previousAttempt = userAnswer;
       tutorFeedback = [evaluation.feedback, evaluation.hint].filter(Boolean).join(" ");
       attemptCount += 1;
+
+      consecutiveFailures += 1;
+      if (consecutiveFailures >= 3) {
+        console.log("[Recovery] Three consecutive failed attempts reached.");
+        const choice = (await terminal.question("Choose [1] backtrack prerequisite [2] defer node [3] retry simplified: ")).trim();
+        if (choice === "1") {
+          const currentNode = await PlanNode.findById(selected.nodeId);
+          const prerequisites = currentNode
+            ? await PlanNode.find({ _id: { $in: currentNode.prerequisites }, status: { $in: ["PENDING", "QUEUED", "IN_PROGRESS"] } })
+            : [];
+          if (prerequisites.length > 0) {
+            const weakest = prerequisites.sort((left, right) => left.attemptCount - right.attemptCount)[0];
+            await PlanNode.updateOne({ _id: selected.nodeId, planId }, { $set: { status: "QUEUED" } });
+            preferredNodeId = weakest._id.toString();
+            consecutiveFailures = 0;
+            break;
+          }
+          scaffoldingDirectives.push("Retry with a smaller worked example and one atomic step.");
+        } else if (choice === "2") {
+          await PlanNode.updateOne({ _id: selected.nodeId, planId }, { $set: { status: "QUEUED" } });
+          preferredNodeId = undefined;
+          consecutiveFailures = 0;
+          break;
+        } else {
+          scaffoldingDirectives.push("Retry with simplified scaffolding and one worked example.");
+        }
+        consecutiveFailures = 0;
+      }
     }
 
     if (shouldExit) break;

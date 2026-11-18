@@ -1,5 +1,4 @@
 import mongoose, { Document, Model, Schema, Types } from "mongoose";
-import { DEFAULT_WML_CAPACITY } from "../../learn-agent/utils/wml-calculator.js";
 
 export const PLAN_STATUSES = [
   "DIAGNOSTIC_IN_PROGRESS",
@@ -48,17 +47,17 @@ const PlanSchema = new Schema<PlanDocument, PlanModel>(
         message: "Bloom level must be an integer",
       },
     },
-    capacityThreshold: {
-      type: Number,
-      default: DEFAULT_WML_CAPACITY,
-      min: 0.1,
-      max: 1.0,
-    },
     status: {
       type: String,
       enum: PLAN_STATUSES,
       default: "DIAGNOSTIC_IN_PROGRESS",
       required: true,
+    },
+    capacityThreshold: {
+      type: Number,
+      default: 0.7,
+      min: 0.45,
+      max: 0.9,
     },
   },
   {

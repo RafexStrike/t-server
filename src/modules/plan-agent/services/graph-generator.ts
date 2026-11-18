@@ -1,59 +1,30 @@
 import { getAbsoluteMasterySystemPrompt } from "../utils/prompt-templates.js";
-import { fetchWithRetry } from "../../common/utils/retry.js";
+import { requestGeminiJson } from "../../../shared/utils/gemini-client.js";
 import type { RawGraphNode } from "../types/graph.js";
 
-const GEMINI_ENDPOINT =
-  "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite:generateContent";
-
-interface GeminiResponse {
-  candidates?: Array<{
-    content?: {
-      parts?: Array<{ text?: string }>;
-    };
-  }>;
-  error?: {
-    message?: string;
-  };
-}
-
-function parseGraph(text: string): RawGraphNode[] {
-  const jsonText = text
-    .trim()
-    .replace(/^```(?:json)?\s*/i, "")
-    .replace(/\s*```$/, "")
-    .trim();
-
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(jsonText);
-  } catch (error) {
-    throw new Error("Gemini returned invalid JSON for the mastery graph.", {
-      cause: error,
-    });
-  }
-
+function parseGraph(payload: Record<string, unknown>): RawGraphNode[] {
+  const parsed = payload.nodes;
   if (!Array.isArray(parsed)) {
-    throw new Error("Gemini graph output must be a JSON array.");
+    throw new Error("Gemini graph output must include a nodes array.");
   }
 
   for (const [index, node] of parsed.entries()) {
+    const candidate = node as Record<string, unknown>;
+    const prerequisites = candidate.prerequisiteNames;
     if (
       typeof node !== "object" ||
       node === null ||
-      typeof node.conceptName !== "string" ||
-      typeof node.bloomLevel !== "number" ||
-      !Number.isInteger(node.bloomLevel) ||
-      node.bloomLevel < 1 ||
-      node.bloomLevel > 6 ||
-      !Array.isArray(node.prerequisiteNames) ||
-      !node.prerequisiteNames.every(
-        (prerequisiteName: unknown) => typeof prerequisiteName === "string",
-      )
+      typeof candidate.conceptName !== "string" ||
+      typeof candidate.bloomLevel !== "number" ||
+      !Number.isInteger(candidate.bloomLevel) ||
+      (candidate.bloomLevel as number) < 1 ||
+      (candidate.bloomLevel as number) > 6 ||
+      !Array.isArray(prerequisites) ||
+      !prerequisites.every((name: unknown) => typeof name === "string")
     ) {
       throw new Error(`Gemini graph output contains an invalid node at index ${index}.`);
     }
   }
-
   return parsed as RawGraphNode[];
 }
 
@@ -64,48 +35,16 @@ function parseGraph(text: string): RawGraphNode[] {
 export async function generateAbsoluteMasteryGraph(
   topic: string,
   apiKey: string,
+  groundedContext?: { conceptSpine: string[]; foundationalConcepts: string[]; advancedConcepts: string[] },
 ): Promise<RawGraphNode[]> {
   console.log(`[Plan Agent] Starting Gemini graph fetch for topic: ${topic}`);
-
-  const response = await fetchWithRetry(() =>
-    fetch(`${GEMINI_ENDPOINT}?key=${encodeURIComponent(apiKey)}`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        systemInstruction: {
-          parts: [{ text: getAbsoluteMasterySystemPrompt(topic) }],
-        },
-        contents: [
-          {
-            role: "user",
-            parts: [{ text: `Generate the absolute mastery prerequisite graph for: ${topic}` }],
-          },
-        ],
-        generationConfig: { responseMimeType: "application/json" },
-      }),
-    }),
-  );
-
-  console.log(`[Plan Agent] Gemini graph fetch status: ${response.status}`);
-
-  const payload = (await response.json()) as GeminiResponse;
-  if (!response.ok) {
-    throw new Error(
-      `Gemini graph request failed (${response.status}): ${payload.error?.message ?? response.statusText}`,
-    );
-  }
-
-  const text = payload.candidates
-    ?.flatMap((candidate) => candidate.content?.parts ?? [])
-    .map((part) => part.text ?? "")
-    .join("")
-    .trim();
-
-  if (!text) {
-    throw new Error("Gemini returned no graph content.");
-  }
-
-  const graph = parseGraph(text);
+  const payload = await requestGeminiJson({
+    prompt: `Generate the absolute mastery prerequisite graph for: ${topic}${groundedContext ? `\nOntology constraints: ${JSON.stringify(groundedContext)}` : ""}`,
+    apiKey,
+    context: "mastery graph",
+    systemInstruction: getAbsoluteMasterySystemPrompt(topic),
+  });
+  const graph = parseGraph(payload);
   console.log(`[Plan Agent] Gemini graph parsing complete: ${graph.length} concepts.`);
   return graph;
 }

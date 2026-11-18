@@ -1,5 +1,5 @@
-## to run a test for the plan agent module
+# To run the Plan Agent tests
 
-```
-    node --import tsx --test src/modules/plan-agent/tests/plan-agent.test.tss
+```sh
+npm run test-plan-agent
 ```

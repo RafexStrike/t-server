@@ -24,7 +24,7 @@ function collectPendingAncestors(
       if (!prerequisite) {
         continue;
       }
-      if (prerequisite.status === "PENDING") {
+      if (prerequisite.status === "PENDING" || prerequisite.status === "QUEUED") {
         pendingIds.push(prerequisiteKey);
       }
       visit(prerequisite.prerequisites);
@@ -54,7 +54,7 @@ function collectPendingDescendants(
       if (!child) {
         continue;
       }
-      if (child.status === "PENDING") {
+      if (child.status === "PENDING" || child.status === "QUEUED") {
         pendingIds.push(childId);
       }
       visit(childId);
@@ -101,7 +101,7 @@ export async function processDiagnosticAnswer(
   const affectedNodeIds = passed
     ? collectPendingAncestors(node, nodesById)
     : collectPendingDescendants(node._id.toString(), childrenById, nodesById);
-  const nextStatus = passed ? "PASSED_IN_DIAGNOSTIC" : "IN_PROGRESS";
+  const nextStatus = passed ? "PASSED_IN_DIAGNOSTIC" : "QUEUED";
 
   node.status = nextStatus;
   await node.save();
@@ -111,7 +111,7 @@ export async function processDiagnosticAnswer(
       {
         _id: { $in: affectedNodeIds },
         planId: node.planId,
-        status: "PENDING",
+        status: { $in: passed ? ["PENDING", "QUEUED"] : ["PENDING", "QUEUED"] },
       },
       { $set: { status: nextStatus } },
     );

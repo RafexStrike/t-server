@@ -33,7 +33,7 @@ export function selectOuterFringe(
   const unlockedNodes = nodes
     .filter(
       (node) =>
-        (node.status === "IN_PROGRESS" || node.status === "PENDING") &&
+        (node.status === "IN_PROGRESS" || node.status === "PENDING" || node.status === "QUEUED") &&
         node.prerequisiteIds.every((prerequisiteId) =>
           satisfiedStatuses.has(nodeStatusById.get(prerequisiteId) ?? ""),
         ),

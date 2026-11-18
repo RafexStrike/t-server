@@ -22,6 +22,7 @@ import {
   getMicroLessonPrompt,
 } from "../utils/tutor-prompts.js";
 import { assessNodeTurnWml, preGateIntrinsicLoad } from "./wml-interceptor.js";
+import { requestGeminiJson as requestGeminiJsonShared } from "../../../shared/utils/gemini-client.js";
 
 const GEMINI_ENDPOINT =
   "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite:generateContent";
@@ -59,7 +60,7 @@ export async function loadLearningNodeState(
   const previousAttempt = latestFailedAttempt?.userAnswer ?? legacyFailedAttempt?.learnerAnswer ?? node.lastAttempt;
   const tutorFeedback = latestFailedAttempt?.tutorFeedback ?? legacyFailedAttempt?.tutorFeedback ?? node.lastTutorFeedback;
   return {
-    capacityThreshold: learner.capacityThreshold ?? plan.capacityThreshold ?? DEFAULT_WML_CAPACITY,
+    capacityThreshold: learner.capacityThreshold ?? DEFAULT_WML_CAPACITY,
     attemptCount: Math.max(node.attemptCount ?? 0, latestLoggedAttempt?.attemptNumber ?? 0),
     wmlSamples: [...(node.wmlSamples ?? [])],
     ...(previousAttempt !== undefined ? { previousAttempt } : {}),
@@ -125,30 +126,7 @@ async function requestGeminiJson(
   apiKey: string,
   context: string,
 ): Promise<Record<string, unknown>> {
-  if (!apiKey.trim()) throw new Error("GEMINI_API_KEY is required for the Micro-Tutor.");
-  const response = await fetchWithRetry(() =>
-    fetch(`${GEMINI_ENDPOINT}?key=${encodeURIComponent(apiKey)}`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        contents: [{ role: "user", parts: [{ text: prompt }] }],
-        generationConfig: { responseMimeType: "application/json" },
-      }),
-    }),
-  );
-  const payload = (await response.json()) as GeminiResponse;
-  if (!response.ok) {
-    throw new Error(
-      `Gemini ${context} request failed (${response.status}): ${payload.error?.message ?? response.statusText}`,
-    );
-  }
-  const text = payload.candidates
-    ?.flatMap((candidate) => candidate.content?.parts ?? [])
-    .map((part) => part.text ?? "")
-    .join("")
-    .trim();
-  if (!text) throw new Error(`Gemini returned no ${context} content.`);
-  return parseJsonObject(text, context);
+  return requestGeminiJsonShared({ prompt, apiKey, context });
 }
 
 function parseLesson(payload: Record<string, unknown>): MicroLessonPayload {
@@ -213,7 +191,7 @@ export async function prepareNodeLesson(params: {
   const startedAt = Date.now();
   const { plan, node, learner } = await verifyPlanAndNode(params);
   const effectiveCapacity =
-    params.capacityThreshold ?? learner?.capacityThreshold ?? plan.capacityThreshold ?? DEFAULT_WML_CAPACITY;
+    params.capacityThreshold ?? learner?.capacityThreshold ?? DEFAULT_WML_CAPACITY;
   if (node.status === "PENDING") {
     node.status = "IN_PROGRESS";
     await node.save();
@@ -443,7 +421,7 @@ export async function submitNodeAttempt(params: {
   const tutorFeedback = [result.feedback.trim(), hint].filter(Boolean).join(" ");
   const conceptKey = normalizeConceptName(node.conceptName);
   const activeCapacityThreshold =
-    params.capacityThreshold ?? learner?.capacityThreshold ?? plan.capacityThreshold ?? DEFAULT_WML_CAPACITY;
+    params.capacityThreshold ?? learner?.capacityThreshold ?? DEFAULT_WML_CAPACITY;
   let attemptNumber = 0;
   for (let retries = 0; retries < 5; retries += 1) {
     const latestAttempt = await AttemptLog.findOne({
@@ -479,13 +457,12 @@ export async function submitNodeAttempt(params: {
 
   const calculation = calculateCognitiveEfficiency({
     mastered: result.mastered,
-    attemptCount: params.attemptCount,
+    attemptCount: attemptNumber,
     averageWml: params.averageWml,
     capacityThreshold: activeCapacityThreshold,
   });
-  await Plan.updateOne({ _id: params.planId, userId: params.userId }, {
-    $set: { capacityThreshold: calculation.updatedCapacityThreshold },
-  });
+  const nextWmlSamples = [...(node.wmlSamples ?? []), params.wmlAssessment.totalWml];
+
   await Promise.all([
     User.updateOne(
       { _id: params.userId },
@@ -496,7 +473,7 @@ export async function submitNodeAttempt(params: {
       {
         $set: {
           attemptCount: attemptNumber,
-          wmlSamples: params.wmlSamples ?? node.wmlSamples ?? [],
+          wmlSamples: nextWmlSamples,
           lastAttempt: params.userAnswer,
           lastTutorFeedback: tutorFeedback,
           status: result.mastered ? "MASTERED" : "IN_PROGRESS",
@@ -535,7 +512,7 @@ export async function submitNodeAttempt(params: {
   }
 
   const masteryScore = result.mastered ? calculation.durableMasteryScore : 0.25;
-  const normalizedAttemptCount = Math.max(1, Math.floor(params.attemptCount));
+  const normalizedAttemptCount = attemptNumber;
   const performanceScore = !result.mastered
     ? 0.25
     : normalizedAttemptCount === 1

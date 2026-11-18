@@ -27,7 +27,7 @@ export async function syncPriorUserMastery(
 
   const unresolvedNodes = await PlanNode.find({
     planId,
-    status: { $in: ["PENDING", "IN_PROGRESS"] },
+    status: { $in: ["PENDING", "QUEUED", "IN_PROGRESS"] },
   });
   if (unresolvedNodes.length === 0) return 0;
 
@@ -56,7 +56,7 @@ export async function syncPriorUserMastery(
     {
       planId,
       _id: { $in: matchingNodeIds },
-      status: { $in: ["PENDING", "IN_PROGRESS"] },
+      status: { $in: ["PENDING", "QUEUED", "IN_PROGRESS"] },
     },
     { $set: { status: "MASTERED" } },
   );

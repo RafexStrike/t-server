@@ -122,3 +122,9 @@ find downstream concepts unlocked by a mastered node, query nodes whose
 The models intentionally do not embed node arrays inside `Plan`. Separately
 stored nodes avoid an ever-growing plan document, allow indexing/querying
 individual concepts, and make graph traversal possible through references.
+
+## Current lifecycle and capacity
+
+PlanNode status is `PASSED_IN_DIAGNOSTIC`, `PENDING`, `QUEUED`, `IN_PROGRESS`, or `MASTERED`. `IN_PROGRESS` is only set when the Micro-Tutor starts learning a node; diagnostic failures and budget caps use `QUEUED`.
+
+Learner cognitive capacity is authoritative on `User.capacityThreshold`. A `Plan.capacityThreshold` snapshot may exist for compatibility but is not updated by attempts or read as runtime authority.

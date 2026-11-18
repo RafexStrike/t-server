@@ -1,6 +1,6 @@
 import { Types } from "mongoose";
 import { User } from "../../auth/models/User.js";
-import { fetchWithRetry } from "../../common/utils/retry.js";
+import { requestGeminiJson } from "../../../shared/utils/gemini-client.js";
 import { UserLearningSlots, toLearningSlots } from "../models/UserLearningSlots.js";
 import { getClarificationSystemPrompt } from "../utils/clarify-prompts.js";
 import type { LearningSlots, SlotEvaluationResult } from "../types/slots.js";
@@ -118,40 +118,14 @@ export async function evaluateUserIntent(
   console.log(`[Plan Agent] Loaded clarification slots for user ${ownerId.toString()}.`);
   console.log("[Plan Agent] Starting Gemini clarification evaluation.");
 
-  const response = await fetchWithRetry(() =>
-    fetch(`${GEMINI_ENDPOINT}?key=${encodeURIComponent(apiKey)}`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        systemInstruction: {
-          parts: [{ text: getClarificationSystemPrompt(currentSlots) }],
-        },
-        contents: [{ role: "user", parts: [{ text: userMessage }] }],
-        generationConfig: { responseMimeType: "application/json" },
-      }),
-    }),
-  );
+  const payload = await requestGeminiJson({
+    prompt: userMessage,
+    apiKey,
+    context: "clarification",
+    systemInstruction: getClarificationSystemPrompt(currentSlots),
+  });
 
-  console.log(`[Plan Agent] Gemini clarification fetch status: ${response.status}`);
-
-  const payload = (await response.json()) as GeminiResponse;
-  if (!response.ok) {
-    throw new Error(
-      `Gemini clarification request failed (${response.status}): ${payload.error?.message ?? response.statusText}`,
-    );
-  }
-
-  const text = payload.candidates
-    ?.flatMap((candidate) => candidate.content?.parts ?? [])
-    .map((part) => part.text ?? "")
-    .join("")
-    .trim();
-
-  if (!text) {
-    throw new Error("Gemini returned no slot evaluation content.");
-  }
-
-  const evaluation = parseSlotEvaluation(text);
+  const evaluation = parseSlotEvaluation(JSON.stringify(payload));
   state.targetLanguageOrTool = evaluation.slots.targetLanguageOrTool;
   state.specificSubdomain = evaluation.slots.specificSubdomain;
   state.targetDepth = evaluation.slots.targetDepth;

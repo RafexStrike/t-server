@@ -22,12 +22,6 @@ KST propagation engine, which updates the node and its related concepts.
 The propagation rules encode the Knowledge Space Theory assumptions used by
 this simplified model:
 
-- Passing a concept marks its pending ancestors as
-  `PASSED_IN_DIAGNOSTIC`, because prerequisites of a concept the user knows
-  are assumed known as well.
-- Failing a concept marks its pending descendants as `IN_PROGRESS`, because a
-  concept that depends on something the user does not know is assumed unknown
-  and should remain in the learning plan.
-
-Both traversals follow the full plan graph, including already resolved
-intermediate nodes, but only alter nodes that are currently `PENDING`.
+- Passing a concept marks PENDING and QUEUED ancestors as `PASSED_IN_DIAGNOSTIC`.
+- Failing a concept marks PENDING and QUEUED descendants as `QUEUED`, because they require learning rather than active Tutor start.
+- Reaching the diagnostic question budget queues remaining PENDING nodes as `QUEUED`.

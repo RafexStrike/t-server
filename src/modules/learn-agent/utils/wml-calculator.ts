@@ -101,6 +101,10 @@ export function calculateExtrinsicLoad(
     (total, block) => total + block.length,
     0,
   );
+  const codeBlockLines = codeBlocks.reduce((total, block) => {
+    const lineCount = block.split("\n").length - 1;
+    return total + Math.max(0, lineCount);
+  }, 0);
   const prose = text
     .replace(/```[\s\S]*?```/g, " ")
     .replace(/`[^`]*`/g, " ");
@@ -131,9 +135,9 @@ export function calculateExtrinsicLoad(
 
   const programmingPunctuationCount =
     text.match(/[{}\[\]();=><|&]/g)?.length ?? 0;
-  const codeRatio =
-    (codeBlockCharacters + programmingPunctuationCount) / text.length;
-  const codeDensityFactor = clamp01(codeRatio / 0.35);
+  const structuralDensity = clamp01(programmingPunctuationCount / Math.max(80, text.length));
+  const lineDensity = clamp01(codeBlockLines / 12);
+  const codeDensityFactor = clamp01(0.65 * lineDensity + 0.35 * structuralDensity);
 
   const matchedConcepts = new Set(
     unmasteredConceptNames

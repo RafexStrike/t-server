@@ -24,7 +24,7 @@ function collectPendingAncestors(
       if (!prerequisite) {
         continue;
       }
-      if (prerequisite.status === "PENDING") {
+      if (prerequisite.status === "PENDING" || prerequisite.status === "QUEUED") {
         count += 1;
       }
       count += visit(prerequisite.prerequisites);
@@ -51,7 +51,7 @@ function collectPendingDescendants(
       visited.add(childId);
 
       const child = nodesById.get(childId);
-      if (child?.status === "PENDING") {
+      if (child?.status === "PENDING" || child?.status === "QUEUED") {
         count += 1;
       }
       count += visit(childId);

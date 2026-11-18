@@ -6,6 +6,8 @@ import { normalizeConceptName } from "../../common/utils/normalize-concept-name.
 import { recordTelemetryEvent } from "../../telemetry/services/telemetry-logger.js";
 import { generateAbsoluteMasteryGraph } from "./graph-generator.js";
 import { breakPrerequisiteCycles, pruneGraphWithStats } from "../utils/graph-pruner.js";
+import { groundOntology } from "./ontology-grounder.js";
+import { syncPriorUserMastery } from "../../learn-agent/services/outer-fringe.js";
 
 /**
  * Generates and stores a user's requested learning plan and its prerequisite
@@ -28,8 +30,11 @@ export async function createLearningPlan(
   }
   console.log(`[Plan Agent] Verified plan owner ${ownerId.toString()}.`);
 
+  console.log(`[Plan Agent] Grounding ontology for "${topic}".`);
+  const groundedOntology = await groundOntology(topic, apiKey);
+  console.log(`[Plan Agent] Ontology grounded: ${groundedOntology.conceptSpine.length} canonical concepts.`);
   console.log(`[Plan Agent] Fetching absolute mastery graph for "${topic}".`);
-  const rawGraph = await generateAbsoluteMasteryGraph(topic, apiKey);
+  const rawGraph = await generateAbsoluteMasteryGraph(topic, apiKey, groundedOntology);
 
   console.log(`[Plan Agent] Pruning graph to Bloom level ${targetDepth}.`);
   const { nodes: prunedGraph, stats: pruningStats } = pruneGraphWithStats(
@@ -111,6 +116,7 @@ export async function createLearningPlan(
       },
       metadata: { topic, targetDepth },
     });
+    await syncPriorUserMastery(plan._id.toString(), ownerId.toString());
   } catch (error) {
     await PlanNode.deleteMany({ planId: plan._id });
     await Plan.deleteOne({ _id: plan._id, userId: ownerId });

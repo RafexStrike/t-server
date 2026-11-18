@@ -3,6 +3,7 @@ import mongoose, { Document, Model, Schema, Types } from "mongoose";
 export const PLAN_NODE_STATUSES = [
   "PASSED_IN_DIAGNOSTIC",
   "PENDING",
+  "QUEUED",
   "IN_PROGRESS",
   "MASTERED",
 ] as const;

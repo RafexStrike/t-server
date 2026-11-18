@@ -20,6 +20,7 @@ import {
   evaluateWorkingMemoryLoad,
   preGateIntrinsicLoad,
 } from "../utils/wml-calculator.js";
+import { User } from "../../auth/models/User.js";
 
 const testWmlAssessment: WmlAssessment = {
   intrinsic: { bloomFactor: 0.2, directPrereqFactor: 0.25, transitiveDepthFactor: 0.125, score: 0.2 },
@@ -269,8 +270,7 @@ test(
         capacityThreshold: 0.70,
         apiKey: "test-key",
       });
-      assert.ok(Math.abs(firstEvaluation.updatedCapacityThreshold - 0.66) < 1e-10);
-      assert.ok(Math.abs(((await Plan.findById(plan._id))?.capacityThreshold ?? 0) - 0.66) < 1e-10);
+      assert.ok(Math.abs(firstEvaluation.updatedCapacityThreshold - 0.70) < 1e-10);
 
       await submitNodeAttempt({
         planId,

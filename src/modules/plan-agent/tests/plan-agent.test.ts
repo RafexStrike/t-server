@@ -3,7 +3,7 @@ import test from "node:test";
 import assert from "node:assert";
 import { connectToDatabase, disconnectFromDatabase } from "../../../config/db.js";
 import { evaluateUserIntent } from "../services/clarify-service.js";
-import { pruneGraph } from "../utils/graph-pruner.js";
+import { pruneGraph, breakPrerequisiteCycles } from "../utils/graph-pruner.js";
 import { createLearningPlan } from "../services/plan-service.js";
 import { getNextDiagnosticNode } from "../services/diagnostic-engine.js";
 import { processDiagnosticAnswer } from "../services/diagnostic-evaluator.js";
@@ -16,8 +16,9 @@ import { useTemporaryJsonl } from "../../telemetry/tests/temporary-jsonl.js";
 import { registerUser, verifySessionToken } from "../../auth/services/auth-service.js";
 import { env, validateEnv } from "../../../config/env.js";
 import { parsePlanChoice } from "../runner/plan-choice.js";
+import { createFetchStub } from "../../learn-agent/tests/fetch-stub.js";
 
-const apiKey = process.env.GEMINI_API_KEY || "";
+const apiKey = "deterministic-test-key";
 let testUserId = "";
 
 test("CLI plan choice rejects empty and out-of-range input", () => {
@@ -58,40 +59,24 @@ test("Plan Agent Integration Test Suite", async (t) => {
 
   // 2. Test Ambiguity Guard (ClarifyService) with light retry logic for 503 spikes
   await t.test("ClarifyService: Handles ambiguous vs scoped queries", async () => {
-    if (!apiKey) {
-      console.warn("Skipping LLM tests: GEMINI_API_KEY is missing.");
-      return;
-    }
+    const harness = createFetchStub(t);
+    harness.enqueue({
+      slots: { targetLanguageOrTool: null, specificSubdomain: null, targetDepth: null },
+      isComplete: false,
+      nextQuestion: "Which programming language or tool should we focus on?",
+    });
+    harness.enqueue({
+      slots: { targetLanguageOrTool: "JavaScript", specificSubdomain: "DOM manipulation", targetDepth: 3 },
+      isComplete: true,
+      nextQuestion: null,
+    });
+    const initialEval = await evaluateUserIntent(testUserId, "I want to learn programming", apiKey);
+    assert.strictEqual(initialEval.isComplete, false);
+    assert.notStrictEqual(initialEval.nextQuestion, null);
 
-    let initialEval;
-    let attempts = 0;
-    while (attempts < 3) {
-      try {
-        initialEval = await evaluateUserIntent(
-          testUserId,
-          "I want to learn programming",
-          apiKey
-        );
-        break;
-      } catch (err: any) {
-        attempts++;
-        if (attempts >= 3) throw err;
-        console.warn(`[Test] Gemini 503 encountered. Retrying attempt ${attempts + 1}...`);
-        await new Promise((res) => setTimeout(res, 2000));
-      }
-    }
-
-    assert.strictEqual(initialEval!.isComplete, false, "Ambiguous prompt should not complete slots");
-    assert.notStrictEqual(initialEval!.nextQuestion, null, "Should generate a clarification question");
-
-    // Fully scoped prompt
-    const finalEval = await evaluateUserIntent(
-      testUserId,
-      "I want to learn JavaScript DOM manipulation at an application/apply level (Bloom 3)",
-      apiKey
-    );
-
-    assert.strictEqual(finalEval.isComplete, true, "Fully scoped prompt should complete all slots");
+    const finalEval = await evaluateUserIntent(testUserId, "I want to learn JavaScript DOM manipulation at an application/apply level (Bloom 3)", apiKey);
+    assert.strictEqual(finalEval.isComplete, true);
+    harness.assertDrained();
   });
 
 // 3. Test Graph Pruning Math
@@ -113,9 +98,16 @@ test("Plan Agent Integration Test Suite", async (t) => {
 
   await t.test("PlanService: Rejects a graph with no valid nodes before persistence", async () => {
     const originalFetch = globalThis.fetch;
-    globalThis.fetch = async () => new Response(JSON.stringify({
-      candidates: [{ content: { parts: [{ text: "[]" }] } }],
-    }), { status: 200, headers: { "Content-Type": "application/json" } });
+    let callIndex = 0;
+    globalThis.fetch = async (_input, _init) => {
+      callIndex += 1;
+      const payload = callIndex === 1
+        ? { conceptSpine: ["Empty graph test"], foundationalConcepts: [], advancedConcepts: [] }
+        : { nodes: [] };
+      return new Response(JSON.stringify({
+        candidates: [{ content: { parts: [{ text: JSON.stringify(payload) }] } }],
+      }), { status: 200, headers: { "Content-Type": "application/json" } });
+    };
     try {
       await assert.rejects(
         createLearningPlan(testUserId, "Empty graph test", 2, "test-key"),
@@ -130,9 +122,14 @@ test("Plan Agent Integration Test Suite", async (t) => {
   // 4. Test End-to-End Plan Creation & Database Ingestion
   let createdPlanId: string;
   await t.test("PlanService: Creates Plan and Parent-Referenced DAG in MongoDB", async () => {
-    if (!apiKey) return;
-
     await Plan.deleteMany({ userId: testUserId });
+    const harness = createFetchStub(t);
+    harness.enqueue({ conceptSpine: ["Variables", "Functions", "DOM Events"], foundationalConcepts: ["Variables", "Functions"], advancedConcepts: ["DOM Events"] });
+    harness.enqueue({ nodes: [
+      { conceptName: "Variables", bloomLevel: 1, prerequisiteNames: [] },
+      { conceptName: "Functions", bloomLevel: 2, prerequisiteNames: ["Variables"] },
+      { conceptName: "DOM Events", bloomLevel: 3, prerequisiteNames: ["Functions"] },
+    ] });
 
     const plan = await createLearningPlan(
       testUserId,
@@ -151,6 +148,7 @@ test("Plan Agent Integration Test Suite", async (t) => {
     for (const node of nodes) {
       assert.strictEqual(Array.isArray(node.prerequisites), true, "Prerequisites must be an array of ObjectIds");
     }
+    harness.assertDrained();
   });
 
   // 5. Test Diagnostic Engine & KST Invalidation
@@ -180,21 +178,15 @@ test("Plan Agent Integration Test Suite", async (t) => {
     await User.deleteOne({ _id: testUserId });
     await disconnectFromDatabase();
   });
-});
 
-// Helper mock node generators
-function variablesNode(name: string, level: number, prereqs: string[]) {
-  return { conceptName: name, bloomLevel: level, prerequisiteNames: prereqs };
-}
-function functionsNode(name: string, level: number, prereqs: string[]) {
-  return variablesNode(name, level, prereqs);
-}
-function domNode(name: string, level: number, prereqs: string[]) {
-  return variablesNode(name, level, prereqs);
-}
-function advancedNode(name: string, level: number, prereqs: string[]) {
-  return variablesNode(name, level, prereqs);
-}
-function orphanNode(name: string, level: number, prereqs: string[]) {
-  return variablesNode(name, level, prereqs);
-}
+  await t.test("GraphPruner: breaks top-level sink cycles cleanly", () => {
+    const cyclic = [
+      { conceptName: "A", bloomLevel: 2, prerequisiteNames: ["B"] },
+      { conceptName: "B", bloomLevel: 2, prerequisiteNames: ["A"] },
+    ];
+    const broken = breakPrerequisiteCycles(cyclic);
+    const pruned = pruneGraph(cyclic, 2);
+    assert.equal(broken.length, 2);
+    assert.equal(pruned.length, 2);
+  });
+});

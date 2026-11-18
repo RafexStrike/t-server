@@ -46,17 +46,27 @@ export function pruneGraphWithStats(
       (name) => canonicalNamesByKey.get(normalizedConceptKey(name)) ?? name,
     ),
   }));
+  const knownNames = new Set(filteredNodes.map((node) => node.conceptName));
+  const connectedFilteredNodes = filteredNodes.filter((node) =>
+    node.prerequisiteNames.every((name) => knownNames.has(name)),
+  );
+  const acyclicFilteredNodes = breakPrerequisiteCycles(connectedFilteredNodes);
   const nodesByName = new Map(
-    filteredNodes.map((node) => [node.conceptName, node]),
+    acyclicFilteredNodes.map((node) => [node.conceptName, node]),
   );
 
   // A node referenced as a prerequisite has a dependent above it, so it is
   // not a finish line. The remaining nodes are sinks in the filtered graph.
   const prerequisiteNames = new Set(
-    filteredNodes.flatMap((node) => node.prerequisiteNames),
+    acyclicFilteredNodes.flatMap((node) => node.prerequisiteNames),
   );
-  const targetSinks = filteredNodes.filter(
-    (node) => !prerequisiteNames.has(node.conceptName),
+  const maxRetainedBloom = acyclicFilteredNodes.reduce(
+    (maximum, node) => Math.max(maximum, node.bloomLevel),
+    0,
+  );
+  const targetBloom = Math.min(targetDepth, maxRetainedBloom);
+  const targetSinks = acyclicFilteredNodes.filter(
+    (node) => node.bloomLevel === targetBloom && !prerequisiteNames.has(node.conceptName),
   );
 
   // Walking prerequisite edges backward from each sink yields its ancestral
@@ -93,12 +103,19 @@ export function pruneGraphWithStats(
     visitAncestors(sink.conceptName);
   }
 
-  const reachableNodes = filteredNodes.filter((node) =>
+  const reachableNodes = acyclicFilteredNodes.filter((node) =>
     requiredNames.has(node.conceptName),
   );
   const nodes = breakPrerequisiteCycles(reachableNodes);
   const edgeCount = (graph: RawGraphNode[]) =>
     graph.reduce((count, node) => count + node.prerequisiteNames.length, 0);
+
+  const reachableCycleEdgesRemoved = reachableNodes.reduce((total, node) => {
+    const original = connectedFilteredNodes.find((candidate) => candidate.conceptName === node.conceptName);
+    const originalPrerequisites = new Set(original?.prerequisiteNames ?? []);
+    const retainedPrerequisites = new Set(node.prerequisiteNames);
+    return total + [...originalPrerequisites].filter((name) => !retainedPrerequisites.has(name)).length;
+  }, 0);
 
   return {
     nodes,
@@ -106,9 +123,9 @@ export function pruneGraphWithStats(
       rawNodeCount: rawGraph.length,
       prunedNodeCount: nodes.length,
       duplicateNodeCount: depthEligibleNodes.length - uniqueNodesByKey.size,
-      cycleEdgesRemoved: edgeCount(reachableNodes) - edgeCount(nodes),
+      cycleEdgesRemoved: reachableCycleEdgesRemoved,
       depthFilteredNodeCount: rawGraph.length - depthEligibleNodes.length,
-      unreachableNodeCount: filteredNodes.length - reachableNodes.length,
+      unreachableNodeCount: acyclicFilteredNodes.length - reachableNodes.length,
     },
   };
 }
@@ -120,6 +137,9 @@ export function breakPrerequisiteCycles(nodes: RawGraphNode[]): RawGraphNode[] {
     prerequisiteNames: [...node.prerequisiteNames],
   }));
   const nodesByName = new Map(graph.map((node) => [node.conceptName, node]));
+  for (const node of graph) {
+    node.prerequisiteNames = node.prerequisiteNames.filter((name) => nodesByName.has(name));
+  }
   const orderedNodes = [...graph].sort(
     (left, right) => left.bloomLevel - right.bloomLevel || left.conceptName.localeCompare(right.conceptName),
   );
