@@ -1,4 +1,5 @@
 import mongoose, { Document, Model, Schema } from "mongoose";
+import { normalizeConceptName } from "../../common/utils/normalize-concept-name.js";
 
 /**
  * Long-lived evidence of a user's mastery, independent of any one generated
@@ -7,6 +8,7 @@ import mongoose, { Document, Model, Schema } from "mongoose";
 export interface UserMasteryDocument extends Document {
   userId: string;
   conceptName: string;
+  canonicalConceptName: string;
   masteryScore: number;
   createdAt: Date;
   updatedAt: Date;
@@ -28,6 +30,12 @@ const UserMasterySchema = new Schema<UserMasteryDocument, UserMasteryModel>(
       trim: true,
       minlength: [1, "A concept name cannot be empty"],
     },
+    canonicalConceptName: {
+      type: String,
+      required: true,
+      trim: true,
+      lowercase: true,
+    },
     masteryScore: {
       type: Number,
       required: true,
@@ -42,8 +50,14 @@ const UserMasterySchema = new Schema<UserMasteryDocument, UserMasteryModel>(
   },
 );
 
-// One current mastery estimate per user/concept pair; upserts can target this key.
-UserMasterySchema.index({ userId: 1, conceptName: 1 }, { unique: true });
+UserMasterySchema.pre("validate", function () {
+  if (this.conceptName) {
+    this.canonicalConceptName = normalizeConceptName(this.conceptName);
+  }
+});
+
+// One current mastery estimate per user/canonical concept pair.
+UserMasterySchema.index({ userId: 1, canonicalConceptName: 1 }, { unique: true });
 
 /** Reuse the compiled model during hot reloads and repeated imports. */
 export const UserMastery: UserMasteryModel =

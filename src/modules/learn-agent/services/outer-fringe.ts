@@ -1,4 +1,5 @@
 import { Types } from "mongoose";
+import { normalizeConceptName } from "../../common/utils/normalize-concept-name.js";
 import { Plan } from "../../plan-agent/models/Plan.js";
 import { PlanNode } from "../../plan-agent/models/PlanNode.js";
 import { UserMastery } from "../../plan-agent/models/UserMastery.js";
@@ -32,8 +33,11 @@ export async function syncPriorUserMastery(
 
   const priorMastery = await UserMastery.find({
     userId,
+    canonicalConceptName: {
+      $in: unresolvedNodes.map((node) => normalizeConceptName(node.conceptName)),
+    },
     masteryScore: { $gte: PRIOR_MASTERY_THRESHOLD },
-  }).select("conceptName");
+  }).select("canonicalConceptName");
   if (priorMastery.length === 0) {
     console.log(
       `[Learn Agent][KST] Prior mastery reconciliation: 0 nodes auto-credited for plan ${planId}.`,
@@ -42,10 +46,10 @@ export async function syncPriorUserMastery(
   }
 
   const masteredConceptNames = new Set(
-    priorMastery.map((mastery) => mastery.conceptName.trim().toLowerCase()),
+    priorMastery.map((mastery) => mastery.canonicalConceptName),
   );
   const matchingNodeIds = unresolvedNodes
-    .filter((node) => masteredConceptNames.has(node.conceptName.trim().toLowerCase()))
+    .filter((node) => masteredConceptNames.has(normalizeConceptName(node.conceptName)))
     .map((node) => node._id);
   if (matchingNodeIds.length === 0) return 0;
   const result = await PlanNode.updateMany(

@@ -3,10 +3,12 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { Types } from "mongoose";
 import { connectToDatabase, disconnectFromDatabase } from "../../../config/db.js";
+import { normalizeConceptName } from "../../common/utils/normalize-concept-name.js";
 import { Plan } from "../../plan-agent/models/Plan.js";
 import { PlanNode } from "../../plan-agent/models/PlanNode.js";
 import { UserMastery } from "../../plan-agent/models/UserMastery.js";
 import { getOuterFringe, syncPriorUserMastery } from "../services/outer-fringe.js";
+import { submitNodeAttempt } from "../services/micro-tutor.js";
 import { calculateCognitiveEfficiency } from "../utils/cognitive-efficiency.js";
 import { selectOuterFringe } from "../utils/outer-fringe-selector.js";
 import {
@@ -97,6 +99,17 @@ test("System 2 efficiency normalizes Paas scoring, bounds capacity, and preserve
   assert.equal(secondAttempt.durableMasteryScore, 0.90);
 });
 
+test("Concept names normalize whitespace and casing for durable mastery keys", async () => {
+  assert.equal(normalizeConceptName("  Closures   and   Scope  "), "closures and scope");
+  const mastery = new UserMastery({
+    userId: new Types.ObjectId().toString(),
+    conceptName: "  Closures  ",
+    masteryScore: 0.9,
+  });
+  await mastery.validate();
+  assert.equal(mastery.canonicalConceptName, "closures");
+});
+
 test(
   "MongoDB reconciles prior mastery case-insensitively and enforces Outer Fringe ownership",
   { skip: !process.env.MONGODB_URI?.trim() },
@@ -137,6 +150,67 @@ test(
 
     assert.equal(await syncPriorUserMastery(planId, userId), 1);
     assert.equal((await PlanNode.findById(node._id))?.status, "MASTERED");
+
+    const closureNodes = await PlanNode.create([
+      {
+        planId: plan._id,
+        conceptName: "Closures",
+        bloomLevel: 1,
+        status: "IN_PROGRESS",
+        prerequisites: [],
+      },
+      {
+        planId: plan._id,
+        conceptName: "closures",
+        bloomLevel: 1,
+        status: "IN_PROGRESS",
+        prerequisites: [],
+      },
+    ]);
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async () => new Response(JSON.stringify({
+      candidates: [{
+        content: { parts: [{ text: JSON.stringify({ mastered: true, feedback: "Correct", hint: null }) }] },
+      }],
+    }), { status: 200, headers: { "Content-Type": "application/json" } });
+    try {
+      const lesson = {
+        explanation: "A closure retains access to its lexical scope.",
+        checkQuestion: "What does a closure retain?",
+        expectedCriteria: "It retains access to lexical scope.",
+      };
+      const firstEvaluation = await submitNodeAttempt({
+        planId,
+        userId,
+        nodeId: closureNodes[0]._id.toString(),
+        lesson,
+        userAnswer: "Its lexical scope",
+        attemptCount: 3,
+        averageWml: 1,
+        capacityThreshold: 0.70,
+        apiKey: "test-key",
+      });
+      assert.ok(Math.abs(firstEvaluation.updatedCapacityThreshold - 0.66) < 1e-10);
+      assert.ok(Math.abs(((await Plan.findById(plan._id))?.capacityThreshold ?? 0) - 0.66) < 1e-10);
+
+      await submitNodeAttempt({
+        planId,
+        userId,
+        nodeId: closureNodes[1]._id.toString(),
+        lesson,
+        userAnswer: "Its lexical scope",
+        attemptCount: 3,
+        averageWml: 1,
+        capacityThreshold: firstEvaluation.updatedCapacityThreshold,
+        apiKey: "test-key",
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+    const closureMastery = await UserMastery.find({ userId, canonicalConceptName: "closures" });
+    assert.equal(closureMastery.length, 1);
+    assert.equal(closureMastery[0].canonicalConceptName, "closures");
+
     await assert.rejects(
       getOuterFringe(planId, otherUserId),
       /Plan not found for the authenticated user/,

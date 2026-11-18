@@ -239,7 +239,9 @@ async function runDiagnostics(planId: string, userId: string): Promise<void> {
 
 async function runLearningSession(planId: string, userId: string): Promise<void> {
   const apiKey = process.env.GEMINI_API_KEY ?? "";
-  let capacityThreshold = DEFAULT_WML_CAPACITY;
+  const plan = await Plan.findOne({ _id: planId, userId });
+  if (!plan) throw new Error(`Plan ${planId} could not be loaded for its owner.`);
+  let capacityThreshold = plan.capacityThreshold ?? DEFAULT_WML_CAPACITY;
 
   console.log("=== Phase 2: Micro-Tutor Learning Session ===");
   while (true) {
@@ -324,9 +326,9 @@ async function runLearningSession(planId: string, userId: string): Promise<void>
         capacityThreshold,
         apiKey,
       });
+      capacityThreshold = evaluation.updatedCapacityThreshold;
       if (evaluation.mastered) {
         console.log(`[Mastered] ${evaluation.feedback}`);
-        capacityThreshold = evaluation.updatedCapacityThreshold;
         console.log(`[Runner] Updated cognitive capacity threshold: ${capacityThreshold.toFixed(2)}.`);
         break;
       }

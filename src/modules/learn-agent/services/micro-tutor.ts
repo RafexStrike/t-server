@@ -1,5 +1,6 @@
 import { Types } from "mongoose";
 import { fetchWithRetry } from "../../common/utils/retry.js";
+import { normalizeConceptName } from "../../common/utils/normalize-concept-name.js";
 import { Plan } from "../../plan-agent/models/Plan.js";
 import { PlanNode } from "../../plan-agent/models/PlanNode.js";
 import { UserMastery } from "../../plan-agent/models/UserMastery.js";
@@ -11,6 +12,7 @@ import type {
 } from "../types/tutor.js";
 import type { WmlAssessment } from "../types/wml.js";
 import { calculateCognitiveEfficiency } from "../utils/cognitive-efficiency.js";
+import { DEFAULT_WML_CAPACITY } from "../utils/wml-calculator.js";
 import {
   getLearnerEvaluationPrompt,
   getMicroLessonPrompt,
@@ -236,25 +238,33 @@ export async function submitNodeAttempt(params: {
     mastered: result.mastered,
     attemptCount: params.attemptCount,
     averageWml: params.averageWml,
-    capacityThreshold: params.capacityThreshold ?? 0.70,
+    capacityThreshold: params.capacityThreshold ?? DEFAULT_WML_CAPACITY,
   });
+  await Plan.findByIdAndUpdate(params.planId, {
+    $set: { capacityThreshold: calculation.updatedCapacityThreshold },
+  });
+
   if (result.mastered) {
     node.status = "MASTERED";
     await node.save();
     const existing = await UserMastery.findOne({
       userId: params.userId,
-      conceptName: node.conceptName,
+      canonicalConceptName: normalizeConceptName(node.conceptName),
     });
     const masteryScore = Math.max(
       existing?.masteryScore ?? 0,
       calculation.durableMasteryScore,
     );
     await UserMastery.updateOne(
-      { userId: params.userId, conceptName: node.conceptName },
+      {
+        userId: params.userId,
+        canonicalConceptName: normalizeConceptName(node.conceptName),
+      },
       {
         $set: {
           userId: params.userId,
           conceptName: node.conceptName,
+          canonicalConceptName: normalizeConceptName(node.conceptName),
           masteryScore,
         },
       },
