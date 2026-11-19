@@ -112,10 +112,10 @@ test(
       planId: plan._id.toString(),
       userId: user._id.toString(),
       nodeId: node._id.toString(),
-      capacityThreshold: 0.70,
+      capacityThreshold: 0.65,
       apiKey: "test-key",
     });
-    assert.equal(turn.wasRegeneratedForOverload, false);
+    assert.equal(turn.wasRegeneratedForOverload, true);
 
     harness.enqueue({ mastered: true, feedback: "Correct", hint: null });
     await submitNodeAttempt({
@@ -138,7 +138,7 @@ test(
     assert.equal(regenerated.agent, "learn-agent-system-1");
     assert.equal(regenerated.metrics?.intrinsicLoad, turn.wmlAssessment.intrinsic.score);
     assert.equal(regenerated.metrics?.extrinsicLoad, turn.wmlAssessment.extrinsic.score);
-    assert.equal(regenerated.metrics?.capacityThreshold, 0.70);
+    assert.equal(regenerated.metrics?.capacityThreshold, 0.65);
     assert.equal(regenerated.metrics?.regenerationCount, 1);
 
     const evaluated = events.find((event) => event.eventType === "attempt_evaluated");

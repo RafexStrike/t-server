@@ -15,7 +15,7 @@ Required environment variables:
 - `BETTER_AUTH_SECRET`
 - `BETTER_AUTH_URL`
 - `GEMINI_API_KEY`
-- `MONGODB_URI` **or** `MONGODB_USERNAME` plus `MONGODB_PASSWORD`
+- `MONGODB_URI` (a complete `mongodb://` or `mongodb+srv://` connection string; required)
 
 Optional: `PORT` (default `5000`) and `CORS_ORIGIN` (comma-separated allowed origins).
 

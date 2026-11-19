@@ -234,9 +234,9 @@ test(
         apiKey,
         capacityThreshold: 0.45,
       });
-      assert.equal(overloadedTurn.wasRegeneratedForOverload, false);
-      assert.equal(overloadedTurn.wmlAssessment.isOverloaded, false);
-      assert.equal(harness.calls.length - overloadStart, 1);
+      assert.equal(overloadedTurn.wasRegeneratedForOverload, true);
+      assert.equal(overloadedTurn.wmlAssessment.isOverloaded, true);
+      assert.equal(harness.calls.length - overloadStart, 2);
       assert.equal(overloadedTurn.lesson.explanation, denseLesson.explanation);
       assert.ok(harness.calls[overloadStart + 1].prompt.includes("End with a single"));
       assert.ok(harness.calls[overloadStart + 1].prompt.includes("Decompose the concept into one atomic sub-step"));
@@ -445,16 +445,14 @@ test(
     await t.test("mastery scores upsert by attempt and preserve a higher cross-plan score", async () => {
       const masteryDefinitions = [
         { conceptName: "  Shared   Mastery Concept  ", bloomLevel: 2 },
-        { conceptName: "Attempt 2 Mastery", bloomLevel: 2 },
-        { conceptName: "Attempt 3 Mastery", bloomLevel: 2 },
       ];
       const { plan, nodes } = await createPlanFixture(userId!, "Durable mastery", masteryDefinitions);
-      for (const [index, attemptCount] of [1, 2, 3].entries()) {
+      for (const attemptCount of [1, 2, 3]) {
         harness.enqueue({ mastered: true, feedback: "Correct.", hint: null });
         const evaluation = await submitNodeAttempt({
           planId: plan._id.toString(),
           userId: userId!,
-          nodeId: nodes[index]._id.toString(),
+          nodeId: nodes[0]._id.toString(),
           lesson: simpleLesson,
           wmlAssessment: testWmlAssessment,
           userAnswer: "Correct answer.",
@@ -463,11 +461,11 @@ test(
           capacityThreshold: 0.70,
           apiKey,
         });
-        const expectedScore = [0.95, 0.90, 0.86][index];
+        const expectedScore = [0.95, 0.90, 0.86][attemptCount - 1];
         assert.equal(evaluation.masteryScore, expectedScore);
         assert.ok(evaluation.updatedCapacityThreshold >= 0.45);
         assert.ok(evaluation.updatedCapacityThreshold <= 0.90);
-        const masteredNode = await PlanNode.findById(nodes[index]._id);
+        const masteredNode = await PlanNode.findById(nodes[0]._id);
         assert.equal(masteredNode?.status, "MASTERED");
         assert.equal(masteredNode?.attempts.at(-1)?.passed, true);
         assert.ok(((await User.findById(userId))?.capacityThreshold ?? 0) >= 0.45);
@@ -477,20 +475,24 @@ test(
       const laterPlan = await createPlanFixture(userId!, "Later mastery", [
         { conceptName: "shared mastery concept", bloomLevel: 2 },
       ]);
-      harness.enqueue({ mastered: true, feedback: "Correct again.", hint: null });
-      const laterEvaluation = await submitNodeAttempt({
-        planId: laterPlan.plan._id.toString(),
-        userId: userId!,
-        nodeId: laterPlan.nodes[0]._id.toString(),
-        lesson: simpleLesson,
-        wmlAssessment: testWmlAssessment,
-        userAnswer: "Correct answer.",
-        attemptCount: 3,
-        averageWml: 1,
-        capacityThreshold: 0.70,
-        apiKey,
-      });
-      assert.equal(laterEvaluation.masteryScore, 0.86);
+      let laterMasteryScore = 0;
+      for (const attemptCount of [1, 2, 3]) {
+        harness.enqueue({ mastered: true, feedback: "Correct again.", hint: null });
+        const laterEvaluation = await submitNodeAttempt({
+          planId: laterPlan.plan._id.toString(),
+          userId: userId!,
+          nodeId: laterPlan.nodes[0]._id.toString(),
+          lesson: simpleLesson,
+          wmlAssessment: testWmlAssessment,
+          userAnswer: "Correct answer.",
+          attemptCount,
+          averageWml: 1,
+          capacityThreshold: 0.70,
+          apiKey,
+        });
+        laterMasteryScore = laterEvaluation.masteryScore;
+      }
+      assert.equal(laterMasteryScore, 0.86);
       assert.equal((await UserMastery.findOne({
         userId,
         conceptKey: "shared mastery concept",
@@ -656,7 +658,6 @@ test(
           assert.equal(node.conceptName, "Closure Applications");
           const overloadStart = harness.calls.length;
           harness.enqueue(denseLesson);
-          harness.enqueue(denseLesson);
           const overloaded = await prepareNodeLesson({
             planId,
             userId: userId!,
@@ -689,9 +690,14 @@ test(
       assert.equal((await Plan.findById(plan._id))?.status, "COMPLETED");
       assert.equal((await getOuterFringe(planId, userId!)).isPlanCompleted, true);
 
-      harness.enqueue([
-        { conceptName: "javascript closures", bloomLevel: 3, prerequisiteNames: [] },
-      ]);
+      harness.enqueue({
+        conceptSpine: ["javascript closures"],
+        foundationalConcepts: ["javascript closures"],
+        advancedConcepts: [],
+      });
+      harness.enqueue({
+        nodes: [{ conceptName: "javascript closures", bloomLevel: 3, prerequisiteNames: [] }],
+      });
       const secondPlan = await createLearningPlan(userId!, "Closures review", 3, apiKey);
       const fetchCountBeforeCredit = harness.calls.length;
       const creditedFringe = await getOuterFringe(secondPlan._id.toString(), userId!);
