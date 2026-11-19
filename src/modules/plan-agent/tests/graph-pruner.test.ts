@@ -43,6 +43,18 @@ test("pruneGraph breaks reachable prerequisite cycles before returning nodes", (
   assert.deepEqual(result.map((node) => node.prerequisiteNames), [["B"], [], ["A"]]);
 });
 
+test("pruneGraph removes descendants of nodes beyond target depth", () => {
+  const result = pruneGraph([
+    { conceptName: "X", bloomLevel: 5, prerequisiteNames: [] },
+    { conceptName: "B", bloomLevel: 2, prerequisiteNames: ["X"] },
+    { conceptName: "A", bloomLevel: 3, prerequisiteNames: ["B"] },
+  ], 4);
+
+  assert.equal(result.some((node) => node.conceptName === "B"), false);
+  assert.equal(result.some((node) => node.conceptName === "A" && node.prerequisiteNames.length === 0), false);
+  assert.deepEqual(result, []);
+});
+
 test("pruneGraph deduplicates normalized concepts and rewrites prerequisite aliases", () => {
   const result = pruneGraph([
     { conceptName: "Core   Concept", bloomLevel: 1, prerequisiteNames: [] },

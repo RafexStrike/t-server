@@ -46,10 +46,15 @@ export function pruneGraphWithStats(
       (name) => canonicalNamesByKey.get(normalizedConceptKey(name)) ?? name,
     ),
   }));
-  const knownNames = new Set(filteredNodes.map((node) => node.conceptName));
-  const connectedFilteredNodes = filteredNodes.filter((node) =>
-    node.prerequisiteNames.every((name) => knownNames.has(name)),
-  );
+  let connectedFilteredNodes = filteredNodes;
+  while (true) {
+    const knownNames = new Set(connectedFilteredNodes.map((node) => node.conceptName));
+    const nextConnectedNodes = connectedFilteredNodes.filter((node) =>
+      node.prerequisiteNames.every((name) => knownNames.has(name)),
+    );
+    if (nextConnectedNodes.length === connectedFilteredNodes.length) break;
+    connectedFilteredNodes = nextConnectedNodes;
+  }
   const acyclicFilteredNodes = breakPrerequisiteCycles(connectedFilteredNodes);
   const nodesByName = new Map(
     acyclicFilteredNodes.map((node) => [node.conceptName, node]),
