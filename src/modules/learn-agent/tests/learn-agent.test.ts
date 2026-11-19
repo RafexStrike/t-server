@@ -11,6 +11,7 @@ import { TelemetryEvent } from "../../telemetry/models/TelemetryEvent.js";
 import { useTemporaryJsonl } from "../../telemetry/tests/temporary-jsonl.js";
 import { getOuterFringe, syncPriorUserMastery } from "../services/outer-fringe.js";
 import { prepareNodeLesson, submitNodeAttempt } from "../services/micro-tutor.js";
+import { assessNodeTurnWml } from "../services/wml-interceptor.js";
 import type { WmlAssessment } from "../types/wml.js";
 import { calculateCognitiveEfficiency } from "../utils/cognitive-efficiency.js";
 import {
@@ -114,6 +115,74 @@ test("WML calculator scores intrinsic and extrinsic load and produces overload s
   assert.equal(assessment.isOverloaded, true);
   assert.ok(assessment.scaffoldingDirectives.some((directive) => directive.includes("atomic sub-step")));
   assert.ok(assessment.scaffoldingDirectives.some((directive) => directive.includes("check-for-understanding")));
+});
+
+test("System 1 counts queued concepts as unmastered when assessing lesson text", async () => {
+  const planId = new Types.ObjectId();
+  const userId = new Types.ObjectId();
+  const currentNodeId = new Types.ObjectId();
+  const queuedNodeId = new Types.ObjectId();
+  const originalPlanExists = Object.getOwnPropertyDescriptor(Plan, "exists");
+  const originalPlanNodeFind = Object.getOwnPropertyDescriptor(PlanNode, "find");
+  const setNodeStatus = (status: "QUEUED" | "MASTERED") => {
+    Object.defineProperty(PlanNode, "find", {
+      configurable: true,
+      value: async () => [
+        {
+          _id: currentNodeId,
+          conceptName: "Current topic",
+          bloomLevel: 1,
+          status: "IN_PROGRESS",
+          prerequisites: [],
+        },
+        {
+          _id: queuedNodeId,
+          conceptName: "Lexical closures",
+          bloomLevel: 1,
+          status,
+          prerequisites: [],
+        },
+      ],
+    });
+  };
+
+  Object.defineProperty(Plan, "exists", {
+    configurable: true,
+    value: async () => ({ _id: planId }),
+  });
+
+  try {
+    setNodeStatus("QUEUED");
+    const queuedAssessment = await assessNodeTurnWml({
+      planId: planId.toString(),
+      userId: userId.toString(),
+      nodeId: currentNodeId.toString(),
+      textToMeasure: "Lexical closures preserve access to variables.",
+    });
+
+    setNodeStatus("MASTERED");
+    const masteredAssessment = await assessNodeTurnWml({
+      planId: planId.toString(),
+      userId: userId.toString(),
+      nodeId: currentNodeId.toString(),
+      textToMeasure: "Lexical closures preserve access to variables.",
+    });
+
+    assert.equal(queuedAssessment.extrinsic.novelTermFactor, 1 / 3);
+    assert.equal(masteredAssessment.extrinsic.novelTermFactor, 0);
+    assert.ok(queuedAssessment.totalWml > masteredAssessment.totalWml);
+  } finally {
+    if (originalPlanExists) {
+      Object.defineProperty(Plan, "exists", originalPlanExists);
+    } else {
+      delete (Plan as unknown as Record<string, unknown>).exists;
+    }
+    if (originalPlanNodeFind) {
+      Object.defineProperty(PlanNode, "find", originalPlanNodeFind);
+    } else {
+      delete (PlanNode as unknown as Record<string, unknown>).find;
+    }
+  }
 });
 
 test("Outer Fringe prioritizes in-progress nodes, gates prerequisites, and detects completion", () => {

@@ -43,7 +43,9 @@ export async function assessNodeTurnWml(params: {
     .filter(
       (candidate) =>
         candidate._id.toString() !== params.nodeId &&
-        (candidate.status === "PENDING" || candidate.status === "IN_PROGRESS"),
+        (candidate.status === "PENDING" ||
+          candidate.status === "IN_PROGRESS" ||
+          candidate.status === "QUEUED"),
     )
     .map((candidate) => candidate.conceptName);
   const assessment = evaluateWorkingMemoryLoad({
