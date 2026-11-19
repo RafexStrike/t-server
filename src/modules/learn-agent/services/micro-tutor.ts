@@ -23,9 +23,6 @@ import {
 import { assessNodeTurnWml, preGateIntrinsicLoad } from "./wml-interceptor.js";
 import { requestGeminiJson as requestGeminiJsonShared } from "../../../shared/utils/gemini-client.js";
 
-const GEMINI_ENDPOINT =
-  "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite:generateContent";
-
 export async function loadLearningNodeState(
   planId: string,
   userId: string,
@@ -93,31 +90,6 @@ export async function getNodeAttemptHistory(params: {
   return [...attempts.values()].sort(
     (left, right) => right.createdAt.getTime() - left.createdAt.getTime(),
   );
-}
-
-interface GeminiResponse {
-  candidates?: Array<{
-    content?: { parts?: Array<{ text?: string }> };
-  }>;
-  error?: { message?: string };
-}
-
-function parseJsonObject(text: string, context: string): Record<string, unknown> {
-  const jsonText = text
-    .trim()
-    .replace(/^```(?:json)?\s*/i, "")
-    .replace(/\s*```$/, "")
-    .trim();
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(jsonText);
-  } catch (error) {
-    throw new Error(`Gemini returned invalid JSON for ${context}.`, { cause: error });
-  }
-  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
-    throw new Error(`Gemini ${context} must be a JSON object.`);
-  }
-  return parsed as Record<string, unknown>;
 }
 
 async function requestGeminiJson(

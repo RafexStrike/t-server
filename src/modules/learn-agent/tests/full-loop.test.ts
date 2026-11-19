@@ -11,7 +11,6 @@ import { UserLearningSlots } from "../../plan-agent/models/UserLearningSlots.js"
 import { UserMastery } from "../../plan-agent/models/UserMastery.js";
 import { TelemetryEvent } from "../../telemetry/models/TelemetryEvent.js";
 import { useTemporaryJsonl } from "../../telemetry/tests/temporary-jsonl.js";
-import { normalizeConceptName } from "../../common/utils/normalize-concept-name.js";
 import { AttemptLog } from "../models/AttemptLog.js";
 import { evaluateUserIntent } from "../../plan-agent/services/clarify-service.js";
 import { getNextDiagnosticNode } from "../../plan-agent/services/diagnostic-engine.js";

@@ -27,7 +27,9 @@ export function selectBacktrackPrerequisite(
   prerequisites: OuterFringeNode[],
 ): OuterFringeNode | undefined {
   return prerequisites
-    .filter((node) => node.status === "PASSED_IN_DIAGNOSTIC")
+    .filter((node) =>
+      node.status === "PASSED_IN_DIAGNOSTIC" || node.status === "MASTERED",
+    )
     .sort(
       (left, right) =>
         right.bloomLevel - left.bloomLevel ||

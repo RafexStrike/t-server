@@ -20,34 +20,6 @@ const SKIP_ANSWERS = new Set([
   "n",
 ]);
 
-function parseJsonObject(text: string, context: string): Record<string, unknown> {
-  const jsonText = text
-    .trim()
-    .replace(/^```(?:json)?\s*/i, "")
-    .replace(/\s*```$/, "")
-    .trim();
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(jsonText);
-  } catch (error) {
-    throw new Error(`Gemini returned invalid JSON for ${context}.`, { cause: error });
-  }
-  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
-    throw new Error(`Gemini ${context} must be a JSON object.`);
-  }
-  return parsed as Record<string, unknown>;
-}
-
-function getResponseText(payload: unknown, context: string): string {
-  const text = (payload as any)?.candidates
-    ?.flatMap((candidate: any) => candidate.content?.parts ?? [])
-    .map((part: any) => part.text ?? "")
-    .join("")
-    .trim();
-  if (!text) throw new Error(`Gemini returned no ${context} content.`);
-  return text;
-}
-
 export async function generateDiagnosticQuestion(
   topic: string,
   conceptName: string,

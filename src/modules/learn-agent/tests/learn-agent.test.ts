@@ -213,21 +213,21 @@ test("Outer Fringe prioritizes in-progress nodes, gates prerequisites, and detec
   );
 });
 
-test("three-failure backtrack reopens a diagnosed prerequisite ahead of its dependent", () => {
+test("three-failure backtrack reopens the highest-Bloom completed prerequisite", () => {
   const backtrackTarget = selectBacktrackPrerequisite([
     { nodeId: "passed-low", conceptName: "Direct foundation", bloomLevel: 1, status: "PASSED_IN_DIAGNOSTIC", prerequisiteIds: [] },
     { nodeId: "passed-high", conceptName: "Direct application", bloomLevel: 2, status: "PASSED_IN_DIAGNOSTIC", prerequisiteIds: ["passed-low"] },
     { nodeId: "already-tutored", conceptName: "Tutored prerequisite", bloomLevel: 3, status: "MASTERED", prerequisiteIds: [] },
   ]);
 
-  assert.equal(backtrackTarget?.nodeId, "passed-high");
+  assert.equal(backtrackTarget?.nodeId, "already-tutored");
   const next = selectOuterFringe([
-    { nodeId: "passed-high", conceptName: "Direct application", bloomLevel: 2, status: "PENDING", prerequisiteIds: ["passed-low"] },
-    { nodeId: "current", conceptName: "Current concept", bloomLevel: 3, status: "QUEUED", prerequisiteIds: ["passed-high"] },
+    { nodeId: "already-tutored", conceptName: "Tutored prerequisite", bloomLevel: 3, status: "PENDING", prerequisiteIds: [] },
+    { nodeId: "current", conceptName: "Current concept", bloomLevel: 4, status: "QUEUED", prerequisiteIds: ["already-tutored"] },
     { nodeId: "passed-low", conceptName: "Direct foundation", bloomLevel: 1, status: "PASSED_IN_DIAGNOSTIC", prerequisiteIds: [] },
   ]);
 
-  assert.equal(next.nextNodeId, "passed-high");
+  assert.equal(next.nextNodeId, "already-tutored");
 });
 
 test("three-failure defer advances to another unlocked node and stops when none exists", () => {
