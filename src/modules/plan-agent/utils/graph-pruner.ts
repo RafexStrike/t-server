@@ -60,13 +60,8 @@ export function pruneGraphWithStats(
   const prerequisiteNames = new Set(
     acyclicFilteredNodes.flatMap((node) => node.prerequisiteNames),
   );
-  const maxRetainedBloom = acyclicFilteredNodes.reduce(
-    (maximum, node) => Math.max(maximum, node.bloomLevel),
-    0,
-  );
-  const targetBloom = Math.min(targetDepth, maxRetainedBloom);
   const targetSinks = acyclicFilteredNodes.filter(
-    (node) => node.bloomLevel === targetBloom && !prerequisiteNames.has(node.conceptName),
+    (node) => !prerequisiteNames.has(node.conceptName),
   );
 
   // Walking prerequisite edges backward from each sink yields its ancestral

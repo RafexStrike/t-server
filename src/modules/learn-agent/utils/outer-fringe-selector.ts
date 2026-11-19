@@ -23,6 +23,25 @@ export function getLearningFringeState(
   return "READY";
 }
 
+export function selectBacktrackPrerequisite(
+  prerequisites: OuterFringeNode[],
+): OuterFringeNode | undefined {
+  return prerequisites
+    .filter((node) => node.status === "PASSED_IN_DIAGNOSTIC")
+    .sort(
+      (left, right) =>
+        right.bloomLevel - left.bloomLevel ||
+        left.conceptName.localeCompare(right.conceptName),
+    )[0];
+}
+
+export function excludeDeferredNodes<T extends { nodeId: string }>(
+  nodes: T[],
+  deferredNodeIds: ReadonlySet<string>,
+): T[] {
+  return nodes.filter((node) => !deferredNodeIds.has(node.nodeId));
+}
+
 export function selectOuterFringe(
   nodes: OuterFringeNode[],
   satisfiedStatuses: ReadonlySet<string> = KNOWLEDGE_FRONTIER_SATISFIED,

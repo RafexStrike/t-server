@@ -38,13 +38,10 @@ export function validateEnv(config: EnvironmentConfig = env): EnvironmentConfig 
   for (const key of ["BETTER_AUTH_SECRET", "BETTER_AUTH_URL", "GEMINI_API_KEY"] as const) {
     if (!config[key]) missing.push(key);
   }
-  if (!isCompleteMongoUri(config.MONGODB_URI)) {
-    if (!config.MONGODB_USERNAME) missing.push("MONGODB_USERNAME");
-    if (!config.MONGODB_PASSWORD) missing.push("MONGODB_PASSWORD");
-  }
+  if (!isCompleteMongoUri(config.MONGODB_URI)) missing.push("MONGODB_URI");
   if (missing.length > 0) {
     throw new Error(
-      `Missing required environment variable(s): ${[...new Set(missing)].join(", ")}. Provide a complete MONGODB_URI to omit MongoDB credentials.`,
+      `Missing or invalid required environment variable(s): ${[...new Set(missing)].join(", ")}. MONGODB_URI must be a complete mongodb:// or mongodb+srv:// URI.`,
     );
   }
   return config;

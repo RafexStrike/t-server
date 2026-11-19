@@ -165,6 +165,17 @@ test(
       assert.equal(harness.calls[requestStart].headers.get("content-type"), "application/json");
       assert.equal(harness.calls[requestStart].body.generationConfig?.responseMimeType, "application/json");
       assert.ok(harness.calls[requestStart].prompt.includes("Basic Recall"));
+      const { plan: queuedPlan, nodes: queuedNodes } = await createPlanFixture(userId!, "Queued tutor transition", [
+        { conceptName: "Queued Recall", bloomLevel: 1, status: "QUEUED" },
+      ]);
+      harness.enqueue(simpleLesson);
+      await prepareNodeLesson({
+        planId: queuedPlan._id.toString(),
+        userId: userId!,
+        nodeId: queuedNodes[0]._id.toString(),
+        apiKey,
+      });
+      assert.equal((await PlanNode.findById(queuedNodes[0]._id))?.status, "IN_PROGRESS");
       const lowLoadDirective = turn.wmlAssessment.scaffoldingDirectives.find((directive) =>
         directive.includes("Learner cognitive load is low"),
       );

@@ -13,7 +13,12 @@ import { getOuterFringe, syncPriorUserMastery } from "../services/outer-fringe.j
 import { prepareNodeLesson, submitNodeAttempt } from "../services/micro-tutor.js";
 import type { WmlAssessment } from "../types/wml.js";
 import { calculateCognitiveEfficiency } from "../utils/cognitive-efficiency.js";
-import { getLearningFringeState, selectOuterFringe } from "../utils/outer-fringe-selector.js";
+import {
+  excludeDeferredNodes,
+  getLearningFringeState,
+  selectBacktrackPrerequisite,
+  selectOuterFringe,
+} from "../utils/outer-fringe-selector.js";
 import {
   calculateExtrinsicLoad,
   calculateIntrinsicLoad,
@@ -136,6 +141,38 @@ test("Outer Fringe prioritizes in-progress nodes, gates prerequisites, and detec
   assert.equal(
     getLearningFringeState({ isPlanCompleted: false, nextNodeId: null }),
     "BLOCKED",
+  );
+});
+
+test("three-failure backtrack reopens a diagnosed prerequisite ahead of its dependent", () => {
+  const backtrackTarget = selectBacktrackPrerequisite([
+    { nodeId: "passed-low", conceptName: "Direct foundation", bloomLevel: 1, status: "PASSED_IN_DIAGNOSTIC", prerequisiteIds: [] },
+    { nodeId: "passed-high", conceptName: "Direct application", bloomLevel: 2, status: "PASSED_IN_DIAGNOSTIC", prerequisiteIds: ["passed-low"] },
+    { nodeId: "already-tutored", conceptName: "Tutored prerequisite", bloomLevel: 3, status: "MASTERED", prerequisiteIds: [] },
+  ]);
+
+  assert.equal(backtrackTarget?.nodeId, "passed-high");
+  const next = selectOuterFringe([
+    { nodeId: "passed-high", conceptName: "Direct application", bloomLevel: 2, status: "PENDING", prerequisiteIds: ["passed-low"] },
+    { nodeId: "current", conceptName: "Current concept", bloomLevel: 3, status: "QUEUED", prerequisiteIds: ["passed-high"] },
+    { nodeId: "passed-low", conceptName: "Direct foundation", bloomLevel: 1, status: "PASSED_IN_DIAGNOSTIC", prerequisiteIds: [] },
+  ]);
+
+  assert.equal(next.nextNodeId, "passed-high");
+});
+
+test("three-failure defer advances to another unlocked node and stops when none exists", () => {
+  const nodes = [
+    { nodeId: "deferred", conceptName: "Deferred", bloomLevel: 1, status: "QUEUED", prerequisiteIds: [] },
+    { nodeId: "alternate", conceptName: "Alternate", bloomLevel: 2, status: "PENDING", prerequisiteIds: [] },
+  ];
+  const frontier = selectOuterFringe(nodes);
+  const candidates = excludeDeferredNodes(frontier.unlockedNodes, new Set(["deferred"]));
+
+  assert.equal(candidates[0]?.nodeId, "alternate");
+  assert.deepEqual(
+    excludeDeferredNodes([frontier.unlockedNodes[0]], new Set(["deferred"])),
+    [],
   );
 });
 

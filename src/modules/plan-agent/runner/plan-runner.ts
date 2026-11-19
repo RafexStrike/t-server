@@ -33,8 +33,12 @@ import {
   submitNodeAttempt,
 } from "../../learn-agent/services/micro-tutor.js";
 import { DEFAULT_WML_CAPACITY } from "../../learn-agent/utils/wml-calculator.js";
-import { getLearningFringeState } from "../../learn-agent/utils/outer-fringe-selector.js";
+import {
+  excludeDeferredNodes,
+  getLearningFringeState,
+} from "../../learn-agent/utils/outer-fringe-selector.js";
 import { parsePlanChoice } from "./plan-choice.js";
+import { reopenBacktrackPrerequisite } from "./plan-recovery.js";
 
 const sessionPath = join(homedir(), ".plan-agent-session.json");
 const terminal = createInterface({ input: stdin, output: stdout });
@@ -262,6 +266,7 @@ async function runLearningSession(planId: string, userId: string): Promise<void>
   if (!learner) throw new Error("Authenticated user could not be loaded for the learning session.");
   let capacityThreshold = learner.capacityThreshold ?? DEFAULT_WML_CAPACITY;
   let preferredNodeId: string | undefined;
+  const deferredNodeIds = new Set<string>();
   let consecutiveFailures = 0;
 
   console.log("=== Phase 2: Micro-Tutor Learning Session ===");
@@ -294,10 +299,17 @@ async function runLearningSession(planId: string, userId: string): Promise<void>
       break;
     }
 
+    const availableNodes = excludeDeferredNodes(fringe.unlockedNodes, deferredNodeIds);
+    if (availableNodes.length === 0 && fringe.unlockedNodes.length > 0) {
+      console.log(
+        "[Recovery] No other unlocked concepts are available right now; ending this session with deferred concepts queued.",
+      );
+      break;
+    }
     const preferred = preferredNodeId
-      ? fringe.unlockedNodes.find((node) => node.nodeId === preferredNodeId)
+      ? availableNodes.find((node) => node.nodeId === preferredNodeId)
       : undefined;
-    const selected = preferred ?? fringe.unlockedNodes.find((node) => node.nodeId === fringe.nextNodeId);
+    const selected = preferred ?? availableNodes.find((node) => node.nodeId === fringe.nextNodeId) ?? availableNodes[0];
     if (!selected) throw new Error("Outer Fringe selected a node that was not in its candidate list.");
     console.log(
       `[Runner] Outer Fringe candidates: ${fringe.unlockedNodes.length} | Selected: ${selected.conceptName} (Bloom ${selected.bloomLevel}) | Remaining: ${fringe.remainingCount}.`,
@@ -395,20 +407,24 @@ async function runLearningSession(planId: string, userId: string): Promise<void>
         console.log("[Recovery] Three consecutive failed attempts reached.");
         const choice = (await terminal.question("Choose [1] backtrack prerequisite [2] defer node [3] retry simplified: ")).trim();
         if (choice === "1") {
-          const currentNode = await PlanNode.findById(selected.nodeId);
-          const prerequisites = currentNode
-            ? await PlanNode.find({ _id: { $in: currentNode.prerequisites }, status: { $in: ["PENDING", "QUEUED", "IN_PROGRESS"] } })
-            : [];
-          if (prerequisites.length > 0) {
-            const weakest = prerequisites.sort((left, right) => left.attemptCount - right.attemptCount)[0];
-            await PlanNode.updateOne({ _id: selected.nodeId, planId }, { $set: { status: "QUEUED" } });
-            preferredNodeId = weakest._id.toString();
+          const backtrackTarget = await reopenBacktrackPrerequisite(planId, selected.nodeId);
+          if (backtrackTarget) {
+            preferredNodeId = backtrackTarget.nodeId;
+            deferredNodeIds.delete(backtrackTarget.nodeId);
+            console.log(
+              `[Recovery] Backtracking to previously diagnosed prerequisite "${backtrackTarget.conceptName}"; "${selected.conceptName}" is queued.`,
+            );
             consecutiveFailures = 0;
             break;
           }
+          console.log(
+            `[Recovery] No untutored diagnosed prerequisites exist for "${selected.conceptName}"; retrying it with a smaller worked example.`,
+          );
           scaffoldingDirectives.push("Retry with a smaller worked example and one atomic step.");
         } else if (choice === "2") {
           await PlanNode.updateOne({ _id: selected.nodeId, planId }, { $set: { status: "QUEUED" } });
+          deferredNodeIds.add(selected.nodeId);
+          console.log(`[Recovery] Deferred "${selected.conceptName}" for this session.`);
           preferredNodeId = undefined;
           consecutiveFailures = 0;
           break;

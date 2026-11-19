@@ -2,7 +2,7 @@ import { getAbsoluteMasterySystemPrompt } from "../utils/prompt-templates.js";
 import { requestGeminiJson } from "../../../shared/utils/gemini-client.js";
 import type { RawGraphNode } from "../types/graph.js";
 
-function parseGraph(payload: Record<string, unknown>): RawGraphNode[] {
+export function parseGraph(payload: Record<string, unknown>): RawGraphNode[] {
   const parsed = payload.nodes;
   if (!Array.isArray(parsed)) {
     throw new Error("Gemini graph output must include a nodes array.");

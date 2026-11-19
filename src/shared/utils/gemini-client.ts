@@ -1,3 +1,5 @@
+import { fetchWithRetry as fetchWithHttpRetry } from "../../modules/common/utils/retry.js";
+
 export const GEMINI_ENDPOINT =
   "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite:generateContent";
 
@@ -29,15 +31,7 @@ export async function fetchWithRetry<T>(
   retries = 3,
   baseDelayMs = 500,
 ): Promise<T> {
-  for (let attempt = 0; ; attempt += 1) {
-    try {
-      return await fn();
-    } catch (error) {
-      if (attempt >= retries) throw error;
-      const delayMs = baseDelayMs * 2 ** attempt + Math.random() * 250;
-      await new Promise((resolve) => setTimeout(resolve, delayMs));
-    }
-  }
+  return fetchWithHttpRetry(fn, retries, baseDelayMs);
 }
 
 export function getGeminiText(payload: GeminiResponse, context: string): string {

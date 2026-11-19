@@ -1,5 +1,4 @@
 import { Types } from "mongoose";
-import { fetchWithRetry } from "../../common/utils/retry.js";
 import { normalizeConceptName } from "../../common/utils/normalize-concept-name.js";
 import { User } from "../../auth/models/User.js";
 import { AttemptLog } from "../models/AttemptLog.js";
@@ -192,7 +191,7 @@ export async function prepareNodeLesson(params: {
   const { plan, node, learner } = await verifyPlanAndNode(params);
   const effectiveCapacity =
     params.capacityThreshold ?? learner?.capacityThreshold ?? DEFAULT_WML_CAPACITY;
-  if (node.status === "PENDING") {
+  if (node.status === "PENDING" || node.status === "QUEUED") {
     node.status = "IN_PROGRESS";
     await node.save();
   }

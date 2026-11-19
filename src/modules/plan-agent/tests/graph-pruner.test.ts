@@ -56,6 +56,19 @@ test("pruneGraph deduplicates normalized concepts and rewrites prerequisite alia
   assertRootReachableDag(result);
 });
 
+test("pruneGraphWithStats retains lower-Bloom terminal sinks", () => {
+  const { nodes } = pruneGraphWithStats([
+    { conceptName: "Foundation", bloomLevel: 1, prerequisiteNames: [] },
+    { conceptName: "Lower-depth finish", bloomLevel: 2, prerequisiteNames: ["Foundation"] },
+    { conceptName: "Target-depth finish", bloomLevel: 3, prerequisiteNames: ["Foundation"] },
+  ], 3);
+
+  assert.deepEqual(
+    nodes.map((node) => node.conceptName),
+    ["Foundation", "Lower-depth finish", "Target-depth finish"],
+  );
+});
+
 test("pruneGraphWithStats reports duplicate, cycle, depth, and unreachable removals", () => {
   const { nodes, stats } = pruneGraphWithStats([
     { conceptName: "A", bloomLevel: 1, prerequisiteNames: ["B"] },
@@ -67,14 +80,14 @@ test("pruneGraphWithStats reports duplicate, cycle, depth, and unreachable remov
     { conceptName: "Too deep", bloomLevel: 6, prerequisiteNames: [] },
   ], 3);
 
-  assert.equal(nodes.length, 3);
+  assert.equal(nodes.length, 5);
   assert.deepEqual(stats, {
     rawNodeCount: 7,
-    prunedNodeCount: 3,
+    prunedNodeCount: 5,
     duplicateNodeCount: 1,
-    cycleEdgesRemoved: 1,
+    cycleEdgesRemoved: 2,
     depthFilteredNodeCount: 1,
-    unreachableNodeCount: 2,
+    unreachableNodeCount: 0,
   });
 });
 

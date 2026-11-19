@@ -7,7 +7,7 @@ export function getAbsoluteMasterySystemPrompt(topic: string): string {
 
 Assume the user wants Absolute Mastery of this topic, corresponding to Bloom's Taxonomy Level 6 (Create). Work backward from that outcome and include the atomic concepts and foundational prerequisites needed to reach it.
 
-Return a JSON array of concept objects. Every object must have exactly these fields:
+Return a JSON object with a top-level "nodes" array: { "nodes": [ ... ] }. Every object in "nodes" must have exactly these fields:
 - "conceptName": a concise, distinct string naming one atomic concept
 - "bloomLevel": an integer from 1 to 6 representing the mastery level for that concept
 - "prerequisiteNames": an array of strings containing the exact conceptName values of its direct prerequisites in this array

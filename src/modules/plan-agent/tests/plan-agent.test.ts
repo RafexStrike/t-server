@@ -40,7 +40,13 @@ test("Environment validation allows complete MongoDB URIs without separate crede
     MONGODB_URI: undefined,
     MONGODB_USERNAME: undefined,
     MONGODB_PASSWORD: "secret",
-  }), /MONGODB_USERNAME/);
+  }), /MONGODB_URI/);
+  assert.throws(() => validateEnv({
+    ...env,
+    MONGODB_URI: undefined,
+    MONGODB_USERNAME: "user",
+    MONGODB_PASSWORD: "secret",
+  }), /MONGODB_URI/);
 });
 
 test("Plan Agent Integration Test Suite", async (t) => {
